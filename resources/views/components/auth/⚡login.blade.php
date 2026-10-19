@@ -62,7 +62,7 @@ new class extends Component
     /** Used by the view */
     public function otpEnabled(): bool
     {
-        return (bool) config('cif.login.otp_enabled', false);
+        return (bool) config('cif.login.otp_enabled', true);
     }
 
     public function canSkipOtp(): bool

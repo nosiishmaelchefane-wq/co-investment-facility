@@ -35,14 +35,15 @@ return [
 
     /*
      | Sign-in
-     |   otp_enabled      — two-step sign-in (6-digit code e-mailed after the password) for the whole platform.
-     |                      When on, each user can still switch it off for themselves in Account settings.
+     |   otp_enabled      — master switch for two-step sign-in (6-digit code e-mailed after the password).
+     |                      ON (default): each user's own setting in Account settings decides (on unless they turned it off).
+     |                      OFF: nobody is asked for a code, whatever their own setting says.
      |   otp_skip_button  — TEMPORARY "Skip code for now" button on the code screen (set false before going live)
-     |   .env:  CIF_OTP_ENABLED=true   CIF_OTP_SKIP_BUTTON=false
+     |   .env:  CIF_OTP_ENABLED=true   CIF_OTP_SKIP_BUTTON=false   (then: php artisan config:clear)
      */
     'login' => [
-        'otp_enabled'     => (bool) env('CIF_OTP_ENABLED', false),
-        'otp_skip_button' => (bool) env('CIF_OTP_SKIP_BUTTON', true),
+        'otp_enabled'     => (bool) env('CIF_OTP_ENABLED', true),
+        'otp_skip_button' => (bool) env('CIF_OTP_SKIP_BUTTON', false),
     ],
 
 ];

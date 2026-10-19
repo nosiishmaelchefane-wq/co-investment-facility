@@ -13,6 +13,14 @@ use Livewire\Component;
 */
 new class extends Component
 {
+    /** Signed out in the meantime (session expired / signed out on another device) → back to the sign-in page */
+    public function boot(): void
+    {
+        if (! auth()->check()) {
+            $this->redirect(\Illuminate\Support\Facades\Route::has('login') ? route('login') : '/', navigate: false);
+        }
+    }
+
     public string $current_password = '';
     public string $password = '';
     public string $password_confirmation = '';
@@ -33,6 +41,9 @@ new class extends Component
 
     public function save(): void
     {
+        if (! auth()->check()) {
+            return;   // signed out — boot() is sending them to the sign-in page
+        }
         $this->validate([
             'current_password' => ['required', 'current_password'],
             'password'         => ['required', 'confirmed', 'different:current_password', Password::min(8)->letters()->numbers()],
@@ -63,6 +74,10 @@ new class extends Component
 };
 ?>
 
+<div>
+    @guest
+        {{-- Not signed in: show nothing (the page itself sends guests to the sign-in page) --}}
+    @else
 @php
     $s      = $this->strength();
     $labels = ['', 'Weak', 'Fair', 'Good', 'Strong'];
@@ -107,3 +122,5 @@ new class extends Component
         </button>
     </div>
 </form>
+    @endguest
+</div>
