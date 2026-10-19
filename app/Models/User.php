@@ -108,7 +108,7 @@ class User extends Authenticatable implements MustVerifyEmail
      */
     public function requiresSignInCode(): bool
     {
-        return (bool) config('cif.login.otp_enabled', false) && ($this->two_factor_enabled ?? true);
+        return (bool) config('cif.login.otp_enabled', true) && ($this->two_factor_enabled ?? true);
     }
 
     public function isActive(): bool

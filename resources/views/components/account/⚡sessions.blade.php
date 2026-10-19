@@ -16,6 +16,14 @@ use Livewire\Component;
 */
 new class extends Component
 {
+    /** Signed out in the meantime (session expired / signed out on another device) → back to the sign-in page */
+    public function boot(): void
+    {
+        if (! auth()->check()) {
+            $this->redirect(\Illuminate\Support\Facades\Route::has('login') ? route('login') : '/', navigate: false);
+        }
+    }
+
     public bool $confirming = false;
     public string $password = '';
 
@@ -61,6 +69,9 @@ new class extends Component
 
     public function signOut(string $id): void
     {
+        if (! auth()->check()) {
+            return;   // signed out — boot() is sending them to the sign-in page
+        }
         abort_if($id === session()->getId(), 400);   // use the normal Logout for this device
 
         DB::table($this->table())->where('user_id', auth()->id())->where('id', $id)->delete();
@@ -71,6 +82,9 @@ new class extends Component
 
     public function signOutOthers(): void
     {
+        if (! auth()->check()) {
+            return;   // signed out — boot() is sending them to the sign-in page
+        }
         $this->validate(['password' => ['required', 'current_password']], [
             'password.required'         => 'Enter your password.',
             'password.current_password' => 'That password is not correct.',
@@ -86,6 +100,10 @@ new class extends Component
 };
 ?>
 
+<div>
+    @guest
+        {{-- Not signed in: show nothing (the page itself sends guests to the sign-in page) --}}
+    @else
 <div class="as-card p-4">
     <div class="as-section-title">Signed-in devices</div>
     <p class="small text-muted mb-3">Where your account is signed in right now. Sign out anything you don't recognise and change your password.</p>
@@ -140,4 +158,6 @@ new class extends Component
             </div>
         @endif
     @endif
+</div>
+    @endguest
 </div>

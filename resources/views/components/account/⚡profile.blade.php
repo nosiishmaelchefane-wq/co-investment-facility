@@ -11,6 +11,14 @@ use Livewire\Component;
 */
 new class extends Component
 {
+    /** Signed out in the meantime (session expired / signed out on another device) → back to the sign-in page */
+    public function boot(): void
+    {
+        if (! auth()->check()) {
+            $this->redirect(\Illuminate\Support\Facades\Route::has('login') ? route('login') : '/', navigate: false);
+        }
+    }
+
     public string $name = '';
     public string $email = '';
     public string $phone = '';
@@ -22,6 +30,9 @@ new class extends Component
     public function mount(): void
     {
         $u = auth()->user();
+        if (! $u) {
+            return;
+        }
         $this->name         = (string) $u->name;
         $this->email        = (string) $u->email;
         $this->phone        = (string) $u->phone;
@@ -30,11 +41,14 @@ new class extends Component
 
     public function emailChanged(): bool
     {
-        return strcasecmp(trim($this->email), (string) auth()->user()->email) !== 0;
+        return strcasecmp(trim($this->email), (string) auth()->user()?->email) !== 0;
     }
 
     public function save(): void
     {
+        if (! auth()->check()) {
+            return;   // signed out — boot() is sending them to the sign-in page
+        }
         $u = auth()->user();
 
         $this->validate([
@@ -77,6 +91,10 @@ new class extends Component
 };
 ?>
 
+<div>
+    @guest
+        {{-- Not signed in: show nothing (the page itself sends guests to the sign-in page) --}}
+    @else
 <form class="as-card p-4" wire:submit="save">
     <div class="as-section-title">Profile</div>
     <p class="small text-muted mb-4">Your name and contact details as they appear on the platform and in e-mails.</p>
@@ -110,13 +128,13 @@ new class extends Component
             @error('phone') <div class="text-danger small mt-1">{{ $message }}</div> @enderror
         </div>
         <div class="col-md-6">
-            <label class="form-label small" for="pf-org">{{ auth()->user()->hasRole('enterprise') ? 'Enterprise name' : 'Organisation' }}</label>
+            <label class="form-label small" for="pf-org">{{ auth()->user()?->hasRole('enterprise') ? 'Enterprise name' : 'Organisation' }}</label>
             <input type="text" class="form-control @error('organisation') is-invalid @enderror" id="pf-org" wire:model="organisation" autocomplete="organization">
             @error('organisation') <div class="text-danger small mt-1">{{ $message }}</div> @enderror
         </div>
         <div class="col-md-6">
             <label class="form-label small">Role</label>
-            <input type="text" class="form-control" value="{{ auth()->user()->primary_role?->display_name ?? '—' }}" disabled>
+            <input type="text" class="form-control" value="{{ auth()->user()?->primary_role?->display_name ?? '—' }}" disabled>
             <div class="form-text small">Roles are changed by the System Administrator.</div>
         </div>
     </div>
@@ -128,3 +146,5 @@ new class extends Component
         </button>
     </div>
 </form>
+    @endguest
+</div>

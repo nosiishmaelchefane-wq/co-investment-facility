@@ -11,6 +11,14 @@ use Livewire\Component;
 */
 new class extends Component
 {
+    /** Signed out in the meantime (session expired / signed out on another device) → back to the sign-in page */
+    public function boot(): void
+    {
+        if (! auth()->check()) {
+            $this->redirect(\Illuminate\Support\Facades\Route::has('login') ? route('login') : '/', navigate: false);
+        }
+    }
+
     public bool $enabled = true;
 
     /** The switch the user is asking for (shown in the confirm box) */
@@ -20,12 +28,15 @@ new class extends Component
 
     public function mount(): void
     {
-        $this->enabled = (bool) (auth()->user()->two_factor_enabled ?? true);
+        $this->enabled = (bool) (auth()->user()?->two_factor_enabled ?? true);
     }
 
     /** Switch clicked → ask for the password first (the switch itself doesn't move yet) */
     public function ask(): void
     {
+        if (! auth()->check()) {
+            return;   // signed out — boot() is sending them to the sign-in page
+        }
         $this->pending = ! $this->enabled;
         $this->reset('password');
         $this->resetValidation();
@@ -39,6 +50,9 @@ new class extends Component
 
     public function confirm(): void
     {
+        if (! auth()->check()) {
+            return;   // signed out — boot() is sending them to the sign-in page
+        }
         abort_if($this->pending === null, 400);
 
         $this->validate(['password' => ['required', 'current_password']], [
@@ -63,34 +77,40 @@ new class extends Component
     /** th***@cafi.org.ls */
     public function masked(): string
     {
-        [$name, $domain] = array_pad(explode('@', (string) auth()->user()->email, 2), 2, '');
+        [$name, $domain] = array_pad(explode('@', (string) auth()->user()?->email, 2), 2, '');
 
         return Str::substr($name, 0, 2).str_repeat('*', max(3, Str::length($name) - 2)).'@'.$domain;
     }
 };
 ?>
 
+<div>
+    @guest
+        {{-- Not signed in: show nothing (the page itself sends guests to the sign-in page) --}}
+    @else
 @php
-    $platformOn = (bool) config('cif.login.otp_enabled', false);
-    $changedAt  = auth()->user()->two_factor_changed_at;
+    $platformOn = (bool) config('cif.login.otp_enabled', true);
+    $changedAt  = auth()->user()?->two_factor_changed_at;
 @endphp
 
 <div class="as-card p-4">
     <div class="as-section-title">Two-step sign-in</div>
     <p class="small text-muted mb-4">When it is on, after your password we e-mail you a 6-digit code that you enter to finish signing in.</p>
 
-    <div class="security-state {{ $enabled ? 'is-on' : 'is-off' }} d-flex align-items-start gap-3 mb-3">
-        <i class="bi {{ $enabled ? 'bi-shield-check text-success' : 'bi-shield-exclamation text-warning' }} fs-3"></i>
+    @php $effective = $platformOn && $enabled; @endphp
+    <div class="security-state {{ $effective ? 'is-on' : 'is-off' }} d-flex align-items-start gap-3 mb-3">
+        <i class="bi {{ $effective ? 'bi-shield-check text-success' : 'bi-shield-exclamation text-warning' }} fs-3"></i>
         <div class="me-auto">
-            <div class="fw-semibold">Two-step sign-in is <span class="{{ $enabled ? 'text-success' : 'text-warning' }}">{{ $enabled ? 'on' : 'off' }}</span></div>
-            <div class="small text-muted">
-                @if ($enabled)
-                    Codes are sent to {{ $this->masked() }}.
-                @else
-                    Anyone with your password can sign in. We recommend turning it back on.
-                @endif
-                @if ($changedAt) Changed {{ $changedAt->format('d M Y') }}. @endif
-            </div>
+            @if ($effective)
+                <div class="fw-semibold">Two-step sign-in is <span class="text-success">on</span></div>
+                <div class="small text-muted">You'll be asked for a code sent to {{ $this->masked() }} each time you sign in.@if ($changedAt) Changed {{ $changedAt->format('d M Y') }}.@endif</div>
+            @elseif (! $platformOn)
+                <div class="fw-semibold">Two-step sign-in is <span class="text-warning">switched off for everyone</span></div>
+                <div class="small text-muted">The administrator has turned it off for the whole platform, so no code is asked for right now. Your choice below applies once it is switched back on.</div>
+            @else
+                <div class="fw-semibold">Two-step sign-in is <span class="text-warning">off</span></div>
+                <div class="small text-muted">Anyone with your password can sign in. We recommend turning it back on.@if ($changedAt) Changed {{ $changedAt->format('d M Y') }}.@endif</div>
+            @endif
         </div>
     </div>
 
@@ -106,12 +126,6 @@ new class extends Component
         </div>
     </div>
 
-    @unless ($platformOn)
-        <div class="callout callout-info small mt-3 mb-0">
-            <i class="bi bi-info-circle me-1"></i>
-            Two-step sign-in is temporarily switched off for everyone while the platform is being tested. Your choice here applies once it is switched back on.
-        </div>
-    @endunless
 
     {{-- ---------- Confirm with password (no Bootstrap JS needed) ---------- --}}
     @if ($pending !== null)
@@ -144,4 +158,6 @@ new class extends Component
             </div>
         </div>
     @endif
+</div>
+    @endguest
 </div>

@@ -12,7 +12,7 @@
     @php
         $me       = auth()->user();
         $initials = $me->initials;
-        $tfOn     = (bool) ($me->two_factor_enabled ?? true);
+        $tfOn     = $me->requiresSignInCode();   // what actually happens at sign-in
     @endphp
 
     <div class="container-fluid p-3 account-settings">
@@ -87,5 +87,4 @@
             </div>
         </div>
     </div>
-    <livewire:notify />
 </x-app-layout>
