@@ -2,12 +2,17 @@
 
 use App\Models\User;
 use Illuminate\Auth\Events\Registered;
-use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Facades\Session;
+use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Support\Str;
 use Illuminate\Validation\Rules;
 use Livewire\Component;
 
+/*
+| Enterprise self-registration.
+|   After registering, Laravel's default "Verify Email Address" e-mail is sent (Registered event → VerifyEmail notification).
+|   The account can't sign in until the link in that e-mail has been clicked (see the login component).
+*/
 new class extends Component
 {
     public string $name = '';
@@ -17,6 +22,11 @@ new class extends Component
     public string $password = '';
     public string $password_confirmation = '';
     public bool $terms = false;
+
+    /** After registering: show "check your e-mail" instead of the form */
+    public bool $registered = false;
+    public string $registeredEmail = '';
+    public ?string $resendMessage = null;
 
     /**
      * Validation rules (same as RegisteredUserController@store + enterprise fields).
@@ -41,7 +51,7 @@ new class extends Component
     }
 
     /**
-     * Handle an incoming registration request.
+     * Create the account and send the verification e-mail. The user is NOT signed in.
      */
     public function register(): void
     {
@@ -50,26 +60,84 @@ new class extends Component
         $user = User::create([
             'name'            => $validated['name'],
             'enterprise_name' => $validated['enterprise_name'],
+            'organisation'    => $validated['enterprise_name'],
             'email'           => $validated['email'],
             'phone'           => $validated['phone'],
             'password'        => Hash::make($validated['password']),
+            'status'          => User::STATUS_ACTIVE,
         ]);
 
-        // If you use spatie/laravel-permission:
-        // $user->assignRole('enterprise');
+        // Self-registered accounts are always enterprises
+        $user->assignRole('enterprise');
 
-        event(new Registered($user));
+        // Sends Laravel's default "Verify Email Address" e-mail (User implements MustVerifyEmail)
+        try {
+            event(new Registered($user));
+        } catch (\Throwable $e) {
+            report($e);
+            $this->resendMessage = 'Your account was created, but the verification e-mail could not be sent. Use "Resend" below to try again.';
+        }
 
-        Auth::login($user);
+        RateLimiter::hit($this->resendKey($user->email), 60);
 
-        Session::regenerate();
+        $this->registered      = true;
+        $this->registeredEmail = $user->email;
+        $this->reset('name', 'enterprise_name', 'email', 'phone', 'password', 'password_confirmation', 'terms');
+    }
 
-        $this->redirect(route('dashboard', absolute: false), navigate: false);
+    /** Send the verification e-mail again (at most once a minute) */
+    public function resendVerification(): void
+    {
+        $key = $this->resendKey($this->registeredEmail);
+
+        if (RateLimiter::tooManyAttempts($key, 1)) {
+            $this->resendMessage = 'Please wait '.RateLimiter::availableIn($key).' seconds before requesting another e-mail.';
+            return;
+        }
+        RateLimiter::hit($key, 60);
+
+        $user = User::where('email', $this->registeredEmail)->first();
+        if ($user && ! $user->hasVerifiedEmail()) {
+            try {
+                $user->sendEmailVerificationNotification();
+                $this->resendMessage = 'A new verification link has been sent to '.$this->registeredEmail.'.';
+            } catch (\Throwable $e) {
+                report($e);
+                $this->resendMessage = 'The e-mail could not be sent right now. Please try again in a few minutes.';
+            }
+        } else {
+            $this->resendMessage = 'This e-mail address is already verified — you can sign in.';
+        }
+    }
+
+    protected function resendKey(string $email): string
+    {
+        return 'verify-resend:'.Str::lower($email);
     }
 };
 ?>
 
 <div>
+    @if ($registered)
+        {{-- ============ Check your e-mail ============ --}}
+        <div class="text-center">
+            <div class="mb-3"><i class="bi bi-envelope-check text-cif-primary" style="font-size: 3rem;"></i></div>
+            <h2 class="h3 fw-bold text-cif-navy mb-2">Check your e-mail</h2>
+            <p class="text-secondary small mb-1">We've sent a verification link to</p>
+            <p class="fw-semibold mb-3">{{ $registeredEmail }}</p>
+            <p class="text-secondary small mb-4">Click the link in the e-mail to activate your account, then sign in. If you can't find it, check your spam or junk folder.</p>
+
+            @if ($resendMessage)
+                <div class="alert alert-info small py-2">{{ $resendMessage }}</div>
+            @endif
+
+            <button type="button" class="btn btn-outline-secondary w-100 mb-2" wire:click="resendVerification" wire:loading.attr="disabled" wire:target="resendVerification">
+                <span wire:loading.remove wire:target="resendVerification"><i class="bi bi-arrow-repeat me-1"></i> Resend verification e-mail</span>
+                <span wire:loading wire:target="resendVerification"><span class="spinner-border spinner-border-sm me-2"></span>Sending…</span>
+            </button>
+            <button type="button" class="btn btn-cif-accent w-100" data-auth-show="login">Go to sign in <i class="bi bi-arrow-right ms-1"></i></button>
+        </div>
+    @else
     <h2 class="h3 fw-bold text-cif-navy mb-1">Register your enterprise</h2>
     <p class="text-secondary small mb-4">Create an account to submit a Transaction EOI or join matchmaking.</p>
 
@@ -157,4 +225,5 @@ new class extends Component
         Already have an account?
         <button type="button" class="btn-link-cif" data-auth-show="login">Sign in</button>
     </p>
+    @endif
 </div>

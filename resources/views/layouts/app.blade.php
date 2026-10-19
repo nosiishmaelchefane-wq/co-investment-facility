@@ -3,8 +3,8 @@
 @section('content')
     <div class="d-flex min-vh-100">
 
-        <!-- Sidebar Wrapper -->
-        <div id="sidebarWrapper" class="sidebar-wrapper" style="flex-shrink: 0; height: 100vh; position: sticky; top: 0; overflow: hidden;">
+        <!-- Sidebar Wrapper — no width of its own; it takes the sidebar's width (280px or 72px collapsed) -->
+        <div id="sidebarWrapper" class="sidebar-wrapper">
             @include('layouts.sidebar.menu')
         </div>
 
@@ -19,7 +19,6 @@
             <!-- Page Content -->
             <main class="p-1 flex-grow-1">
                 {{ $slot }}
-         
             </main>
 
         </div>
@@ -28,23 +27,12 @@
 
     <style>
         .sidebar-wrapper {
-            width: 280px;
-            transition: width 0.3s ease;
-        }
-
-        .sidebar-wrapper.collapsed {
-            width: 72px;
+            flex-shrink: 0;
+            height: 100vh;
+            position: sticky;
+            top: 0;
+            overflow: visible;   /* lets the collapsed-menu tooltips show beside the sidebar */
+            z-index: 1035;
         }
     </style>
-
-    <script>
-    (function() {
-        window.addEventListener('sidebarToggle', function() {
-            const sidebarWrapper = document.getElementById('sidebarWrapper');
-            if (sidebarWrapper) {
-                sidebarWrapper.classList.toggle('collapsed');
-            }
-        });
-    })();
-    </script>
 @endsection

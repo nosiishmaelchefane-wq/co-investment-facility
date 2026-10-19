@@ -1,19 +1,26 @@
 {{--
-    CIF Sidebar — template only (no routes, no permissions).
-    To wire up later:
-      - replace 'url' => '#' with route('...')
-      - replace 'active' => false with request()->routeIs('...')
-    Wired so far: Dashboard, Transaction EOI (expression-of-interest.*)
-      - wrap items/sections with @can / @canany as needed
+    CIF Sidebar
+    Each item has a 'show' rule — anything the signed-in user isn't allowed to open is left out completely,
+    and a section with nothing left in it is hidden too.
+      Dashboard              → staff (not enterprises — they land on their applications)
+      Transaction EOI        → everyone signed in (the list itself is limited to what they may see)
+      Compose Email          → App\Support\EmailRecipients::canCompose()  (same rule as the page)
+      All Users              → users.manage
+      Roles & Permissions    → roles.manage
+    Decision gates (G1–G5) live as tabs on the EOI detail page, not here.
 --}}
 @php
+    $u        = auth()->user();
+    $isStaff  = $u && ! $u->hasRole('enterprise');
+
     $menu = [
         [
             'section' => null,
             'items' => [
                 ['label' => 'Dashboard', 'icon' => 'bi-speedometer2',
                  'url'    => Route::has('dashboard') ? route('dashboard') : '#',
-                 'active' => request()->routeIs('dashboard')],
+                 'active' => request()->routeIs('dashboard'),
+                 'show'   => $isStaff && Route::has('dashboard')],
             ],
         ],
         [
@@ -21,57 +28,39 @@
             'items' => [
                 ['label' => 'Transaction Expression of Interest (EOI)', 'icon' => 'bi-file-earmark-text-fill',
                  'url'    => route('expression-of-interest.index'),
-                 'active' => request()->routeIs('expression-of-interest.*')],
-                ['label' => 'Matchmaking',       'icon' => 'bi-arrow-left-right',       'url' => '#', 'active' => false],
-            ],
-        ],
-        [
-            'section' => 'Decision Gates',
-            'items' => [
-                ['label' => 'Eligibility Screening',  'icon' => 'bi-funnel-fill',           'url' => '#', 'active' => false, 'badge' => 'G1'],
-                ['label' => 'Due Diligence & ESGC',   'icon' => 'bi-search',                'url' => '#', 'active' => false, 'badge' => 'G2'],
-                ['label' => 'Committee Evaluation',   'icon' => 'bi-clipboard2-data-fill',  'url' => '#', 'active' => false, 'badge' => 'G3'],
-                ['label' => 'Final Authorisation',    'icon' => 'bi-patch-check-fill',      'url' => '#', 'active' => false, 'badge' => 'G4'],
-                ['label' => 'Conditions Precedent',   'icon' => 'bi-list-check',            'url' => '#', 'active' => false, 'badge' => 'G5'],
-            ],
-        ],
-        [
-            'section' => 'Funding',
-            'items' => [
-                ['label' => 'Capital Verification', 'icon' => 'bi-shield-fill-check', 'url' => '#', 'active' => false],
-                ['label' => 'Disbursements',        'icon' => 'bi-cash-stack',        'url' => '#', 'active' => false],
-            ],
-        ],
-        [
-            'section' => 'Portfolio',
-            'items' => [
-                ['label' => 'Portfolio Monitoring',  'icon' => 'bi-graph-up-arrow', 'url' => '#', 'active' => false],
-                ['label' => 'Milestones & Reports',  'icon' => 'bi-flag-fill',      'url' => '#', 'active' => false],
-            ],
-        ],
-        [
-            'section' => 'Insights',
-            'items' => [
-                ['label' => 'Reports & Analytics', 'icon' => 'bi-bar-chart-line-fill', 'url' => '#', 'active' => false],
-                ['label' => 'Documents',           'icon' => 'bi-folder2-open',        'url' => '#', 'active' => false],
+                 'active' => request()->routeIs('expression-of-interest.*'),
+                 'show'   => (bool) $u],
             ],
         ],
         [
             'section' => 'Communication',
             'items' => [
-                ['label' => 'Compose Email', 'icon' => 'bi-pencil-square', 'url' => '#', 'active' => false],
+                ['label' => 'Compose Email', 'icon' => 'bi-pencil-square',
+                 'url'    => Route::has('compose.email') ? route('compose.email') : '#',   // /compose-email → ComposeEmailController@index
+                 'active' => request()->routeIs('compose.email*'),
+                 'show'   => Route::has('compose.email') && \App\Support\EmailRecipients::canCompose($u)],
             ],
         ],
         [
             'section' => 'Administration',
             'items' => [
-                ['label' => 'All Users',             'icon' => 'bi-person-lines-fill', 'url' => '#', 'active' => false],
-                ['label' => 'Roles & Permissions',   'icon' => 'bi-shield-lock-fill',  'url' => '#', 'active' => false, 'badge' => 'Admin'],
-                ['label' => 'Configuration',         'icon' => 'bi-sliders',           'url' => '#', 'active' => false],
-                ['label' => 'Audit Trail',           'icon' => 'bi-clock-history',     'url' => '#', 'active' => false],
+                ['label' => 'All Users',             'icon' => 'bi-person-lines-fill',
+                 'url'    => route('users.index'),               // /manage-users → ManageUsersController@index
+                 'active' => request()->routeIs('users.*'),
+                 'show'   => $u?->can('users.manage')],
+                ['label' => 'Roles & Permissions',   'icon' => 'bi-shield-lock-fill',
+                 'url'    => route('roles.index'),               // /roles-permissions → RolesPermissionsController@index
+                 'active' => request()->routeIs('roles.*'), 'badge' => 'Admin',
+                 'show'   => $u?->can('roles.manage')],
             ],
         ],
     ];
+
+    // Keep only what this user may open; drop sections that end up empty
+    $menu = collect($menu)
+        ->map(fn ($g) => array_merge($g, ['items' => array_values(array_filter($g['items'], fn ($i) => (bool) ($i['show'] ?? true)))]))
+        ->filter(fn ($g) => ! empty($g['items']))
+        ->values()->all();
 @endphp
 
 <div class="sidebar-custom d-flex flex-column flex-shrink-0 p-3" id="sidebar">
@@ -142,7 +131,7 @@
             </div>
             <div class="d-flex flex-column ms-3 sidebar-text overflow-hidden">
                 <strong class="text-truncate profile-name">{{ auth()->user()->name ?? 'User' }}</strong>
-                <small class="text-muted text-capitalize text-truncate">{{ auth()->user()->email ?? 'Role' }}</small>
+                <small class="text-muted text-truncate">{{ auth()->user()->email ?? '' }}</small>
             </div>
         </div>
 
@@ -155,7 +144,7 @@
             </button>
         </div>
 
-        <form id="logout-form" action="#" method="POST" class="d-none">
+        <form id="logout-form" action="{{ route('logout') }}" method="POST" class="d-none">
             @csrf
         </form>
     </div>
