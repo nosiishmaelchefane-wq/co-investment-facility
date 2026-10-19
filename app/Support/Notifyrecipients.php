@@ -93,6 +93,7 @@ class NotifyRecipients
             ->filter(fn ($u) => filled($u->email))
             ->filter(fn ($u) => ! defined(User::class.'::STATUS_INACTIVE') || ($u->status ?? null) !== User::STATUS_INACTIVE)
             ->unique('id')
+            
             ->values();
     }
 }
