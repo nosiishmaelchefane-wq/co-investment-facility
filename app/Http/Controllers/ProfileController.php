@@ -2,59 +2,40 @@
 
 namespace App\Http\Controllers;
 
-use App\Http\Requests\ProfileUpdateRequest;
-use Illuminate\Http\RedirectResponse;
-use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Redirect;
+use App\Models\EnterpriseDocument;
+use App\Models\User;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\View\View;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class ProfileController extends Controller
 {
     /**
-     * Display the user's profile form.
+     * Enterprise profile page.
+     *   /enterprise-profile          → enterprise: own profile (both tabs) · staff: list of enterprises
+     *   /enterprise-profile/{user}   → staff: that enterprise's profile, read-only (Profile tab only)
      */
-    public function edit(Request $request): View
+    public function index(?User $user = null): View
     {
-        return view('profile.edit', [
-            'user' => $request->user(),
-        ]);
+        return view('profile.index', ['userId' => $user?->id]);
     }
 
     /**
-     * Update the user's profile information.
+     * Private download of an enterprise profile document.
+     * Allowed: the enterprise that owns the profile, staff who can view all EOIs, and the Investment Committee
+     * (members scoring and the secretary recording the decision).
      */
-    public function update(ProfileUpdateRequest $request): RedirectResponse
+    public function document(EnterpriseDocument $document): StreamedResponse
     {
-        $request->user()->fill($request->validated());
+        $user = auth()->user();
 
-        if ($request->user()->isDirty('email')) {
-            $request->user()->email_verified_at = null;
-        }
+        abort_unless(
+            $document->profile?->user_id === $user->id || $user->can('eoi.view-all') || $user->can('gate3.score') || $user->can('gate3.decide'),
+            403
+        );
 
-        $request->user()->save();
+        abort_unless(Storage::disk(EnterpriseDocument::DISK)->exists($document->path), 404);
 
-        return Redirect::route('profile.edit')->with('status', 'profile-updated');
-    }
-
-    /**
-     * Delete the user's account.
-     */
-    public function destroy(Request $request): RedirectResponse
-    {
-        $request->validateWithBag('userDeletion', [
-            'password' => ['required', 'current_password'],
-        ]);
-
-        $user = $request->user();
-
-        Auth::logout();
-
-        $user->delete();
-
-        $request->session()->invalidate();
-        $request->session()->regenerateToken();
-
-        return Redirect::to('/');
+        return Storage::disk(EnterpriseDocument::DISK)->download($document->path, $document->original_name);
     }
 }

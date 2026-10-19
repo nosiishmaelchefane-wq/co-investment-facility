@@ -136,14 +136,11 @@
 <nav class="cif-nav">
     <div class="container py-3 d-flex align-items-center justify-content-between">
         <a href="#" class="d-flex align-items-center gap-3 text-decoration-none">
-            <span class="brand-mark">CI</span>
-            <span class="lh-sm text-white">
-                <span class="d-block fw-bold">Co-Investment Facility</span>
-                <span class="d-block small text-white-60">LEHSFF · CAFI</span>
-            </span>
+            <img src="{{ asset('images/lehsff-logo.png') }}"
+                alt="Co-Investment Facility"
+                style="height: 45px; width: auto;">
         </a>
-
-        <ul class="nav d-none d-md-flex gap-2">
+                <ul class="nav d-none d-md-flex gap-2">
             <li class="nav-item"><a class="nav-link" href="#how-it-works">How it works</a></li>
             <li class="nav-item"><a class="nav-link" href="#pathways">Pathways</a></li>
             <li class="nav-item"><a class="nav-link" href="#eligibility">Eligibility</a></li>

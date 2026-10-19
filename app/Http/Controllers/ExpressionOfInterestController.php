@@ -11,7 +11,8 @@ class ExpressionOfInterestController extends Controller
         return view('expression-of-interest.index');
     }
 
-    public function show(){
-         return view('expression-of-interest.show');
+    public function show(int $id)
+    {
+        return view('expression-of-interest.show', ['id' => $id]);
     }
 }
