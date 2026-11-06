@@ -39,9 +39,10 @@ class Dashboard
         'dd_hold'            => ['DD on hold',                'status-referred',  'bi-pause-circle'],
         'committee'          => ['Investment Committee',      'status-approved',  'bi-people'],
         'ic_deferred'        => ['Deferred by IC',            'status-referred',  'bi-pause-circle'],
+        'grant_readiness' => ['Grant readiness review', 'status-in-review', 'bi-clipboard-check'],
         'authorisation'      => ['Final authorisation',       'status-approved',  'bi-patch-check'],
         'authorisation_hold' => ['Authorisation on hold',     'status-referred',  'bi-pause-circle'],
-        'authorised'         => ['Authorised',                'status-approved',  'bi-patch-check-fill'],
+        'authorised'         => ['Formally approved',                'status-approved',  'bi-patch-check-fill'],
         'capital_pending'    => ['Awaiting investor capital', 'status-referred',  'bi-shield-exclamation'],
         'cleared'            => ['Cleared for disbursement',  'status-approved',  'bi-cash-coin'],
         'escalated'          => ['Escalated',                 'status-rejected',  'bi-exclamation-octagon'],
@@ -54,8 +55,9 @@ class Dashboard
         'g1'         => ['G1 · Screening',     ['submitted', 'in_review', 'returned'],         'bi-funnel'],
         'g2'         => ['G2 · Due diligence', ['invited', 'due_diligence', 'dd_hold'],        'bi-search'],
         'g3'         => ['G3 · Committee',     ['committee', 'ic_deferred'],                   'bi-people'],
-        'g4'         => ['G4 · Authorisation', ['authorisation', 'authorisation_hold'],        'bi-patch-check'],
-        'g5'         => ['G5 · Conditions',    ['authorised', 'capital_pending', 'escalated'], 'bi-list-check'],
+        'readiness'  => ['G4 · Grant readiness', ['grant_readiness'],                          'bi-clipboard-check'],
+        'g4'         => ['G5 · Authorisation', ['authorisation', 'authorisation_hold'],        'bi-patch-check'],
+        'g5'         => ['G6/7 · Conditions & disbursement',    ['authorised', 'capital_pending', 'escalated'], 'bi-list-check'],
         'disbursing' => ['Disbursing',         ['cleared'],                                    'bi-cash-coin'],
     ];
 
@@ -293,7 +295,33 @@ class Dashboard
             }
         }
 
-        /* ---------- Gate 4 · MD / PS (recorded by the PMU) ---------- */
+        /* ---------- Gate 4 · Grant readiness (Grants Management → Hub Manager → PMU Director) ---------- */
+        if ($u->canAny(['readiness.review', 'readiness.hub', 'readiness.director'])) {
+            $ready = \App\Models\GrantReadiness::whereNull('decided_at')
+                ->whereHas('expressionOfInterest', fn ($q) => $q->where('status', EOI::STATUS_GRANT_READINESS))
+                ->with('expressionOfInterest.user:id,name')->get();
+            $notStarted = $eois([EOI::STATUS_GRANT_READINESS])
+                ->reject(fn ($e) => $ready->contains('expression_of_interest_id', $e->id));
+
+            if ($u->can('readiness.review')) {
+                $add('Grant readiness review', 'Review the budget, bank account and documents; prepare the Grant Readiness Memo and Draft Grant Agreement (Gate 4).', 'bi-clipboard-check', 'warning', 'Grants Management',
+                    $notStarted->map(fn ($e) => $this->row($e, 'readiness', 'Not started'))
+                        ->merge($ready->filter(fn ($g) => $g->stage() === 'grants')
+                            ->map(fn ($g) => $this->row($g->expressionOfInterest, 'readiness', $g->round > 1 ? 'Returned — round '.$g->round : 'In progress'))));
+            }
+            if ($u->can('readiness.hub')) {
+                $add('Approve for submission', 'Grant Readiness Memo and Draft Grant Agreement waiting for the Hub Manager.', 'bi-person-workspace', 'primary', 'Hub Manager',
+                    $ready->filter(fn ($g) => $g->stage() === 'hub')
+                        ->map(fn ($g) => $this->row($g->expressionOfInterest, 'readiness', 'Submitted '.$g->gm_submitted_at?->diffForHumans())));
+            }
+            if ($u->can('readiness.director')) {
+                $add('Approve to proceed to final authorisation', 'Approved by the Hub Manager — waiting for the PMU Director of Implementation.', 'bi-person-check', 'accent', 'PMU Director',
+                    $ready->filter(fn ($g) => $g->stage() === 'director')
+                        ->map(fn ($g) => $this->row($g->expressionOfInterest, 'readiness', 'Hub Manager approved '.$g->hub_decided_at?->diffForHumans())));
+            }
+        }
+
+        /* ---------- Gate 5 · MD / PS signatures (recorded by the PMU) ---------- */
         if ($u->canAny(['gate4.md', 'gate4.ps', 'gate5.verify'])) {
             $rounds = Authorisation::whereNull('decided_at')
                 ->whereHas('expressionOfInterest', fn ($q) => $q->where('status', EOI::STATUS_AUTHORISATION))
@@ -303,11 +331,11 @@ class Dashboard
                 : ($a->sentForSigning($role) ? 'Sent for signing '.$a->{"{$role}_sent_at"}->diffForHumans() : 'Not yet sent for signing');
 
             if ($u->canAny(['gate4.md', 'gate5.verify'])) {
-                $add('Managing Director approval', 'Gate 4 — first approval.', 'bi-person-badge', 'primary', 'MD · PMU',
+                $add('Managing Director signature', 'Gate 5 — the MD signs the Grant Agreement first.', 'bi-person-badge', 'primary', 'MD · PMU',
                     $rounds->filter(fn ($a) => $a->stage() === 'md')->map(fn ($a) => $this->row($a->expressionOfInterest, 'g4', $meta($a, 'md'))));
             }
             if ($u->canAny(['gate4.ps', 'gate5.verify'])) {
-                $add('Principal Secretary authorisation', 'Gate 4 — final authorisation after the MD.', 'bi-bank', 'primary', 'PS · PMU',
+                $add('Principal Secretary signature', 'Gate 5 — the PS signs after the MD (formal approval).', 'bi-bank', 'primary', 'PS · PMU',
                     $rounds->filter(fn ($a) => $a->stage() === 'ps')->map(fn ($a) => $this->row($a->expressionOfInterest, 'g4', $meta($a, 'ps'))));
             }
             if ($u->can('gate5.verify')) {
@@ -316,7 +344,7 @@ class Dashboard
             }
         }
 
-        /* ---------- Gate 5 · PMU ---------- */
+        /* ---------- Gate 6 · Conditions precedent · PMU ---------- */
         if ($u->can('gate5.verify')) {
             $add('Condition evidence to verify', 'The enterprise uploaded evidence — mark the condition met.', 'bi-file-earmark-check', 'warning', 'PMU',
                 CpCondition::where('status', 'outstanding')->whereNotNull('evidence_path')
@@ -324,7 +352,7 @@ class Dashboard
                     ->with('review.expressionOfInterest.user:id,name')->latest('evidence_at')->get()
                     ->map(fn ($c) => $this->row($c->review?->expressionOfInterest, 'g5', Str::limit($c->finding, 80))));
 
-            $add('Gate 5 in progress', 'Still to do before the transaction can be cleared for disbursement.', 'bi-list-check', 'primary', 'PMU',
+            $add('Gate 6 in progress', 'Still to do before the transaction can be cleared for disbursement.', 'bi-list-check', 'primary', 'PMU',
                 $notCleared($this->reviews())
                     ->whereHas('expressionOfInterest', fn ($q) => $q->whereIn('status', [EOI::STATUS_AUTHORISED, EOI::STATUS_CAPITAL_PENDING]))
                     ->with('expressionOfInterest.user:id,name')->get()
@@ -341,24 +369,52 @@ class Dashboard
                     ->map(fn ($d) => $this->row($d->review?->expressionOfInterest, 'g5', $d->investor.' · '.self::m($d->amount))));
         }
 
-        /* ---------- Finance ---------- */
-        if ($u->canAny(['disburse.process', 'gate5.verify'])) {
+        /* ---------- Gate 6 · Finance readiness confirmation ---------- */
+        if ($u->can('disburse.process')) {
+            $add('Confirm disbursement readiness', 'The programme team confirmed the file is complete — Finance confirms (Gate 6, Step 3).', 'bi-clipboard2-check', 'warning', 'Finance',
+                $notCleared($this->reviews())->whereNotNull('readiness_pmu_at')->whereNull('readiness_finance_at')
+                    ->where('readiness_pmu_by', '!=', $u->id)
+                    ->with('expressionOfInterest.user:id,name')->get()
+                    ->map(fn ($r) => $this->row($r->expressionOfInterest, 'g5', 'Programme confirmed '.$r->readiness_pmu_at->diffForHumans())));
+        }
+
+        /* ---------- Gate 7 · disbursement ---------- */
+        if ($u->canAny(['disburse.process', 'disburse.approve', 'gate5.verify'])) {
             $cleared = $this->reviews()->where('outcome', ConditionReview::OUTCOME_CLEARED)
                 ->with(['expressionOfInterest.user:id,name', 'tranches'])->get();
+            $next = fn ($r) => $r->tranches->whereNull('released_on')->sortBy('position')->first();
 
-            if ($u->can('disburse.process')) {
-                $add('Tranches ready to release', 'Release with the payment reference, date and proof of payment.', 'bi-cash-coin', 'accent', 'Finance',
-                    $cleared->map(function ($r) {
-                        $next = $r->tranches->whereNull('released_on')->sortBy('position')->first();
-                        return $next ? $this->row($r->expressionOfInterest, 'g5', $next->label.' · '.self::m($next->amount)) : null;
+            if ($u->can('gate5.verify')) {
+                $add('Request payment approval', 'Cleared — verify the matching investment for the next tranche and request payment approval (Gate 7).', 'bi-send', 'primary', 'PMU',
+                    $cleared->map(function ($r) use ($next) {
+                        $t = $next($r);
+                        return $t && ! $t->requested_at && $t->outcome !== 'not_eligible'
+                            ? $this->row($r->expressionOfInterest, 'g5', $t->label.' · '.self::m($t->amount).($t->outcome === 'pending' ? ' · on hold' : '')) : null;
                     }));
             }
-            $add('Schedule the next tranche', 'Nothing left in tranches, but part of the grant is still to be disbursed.', 'bi-calendar-plus', 'muted', 'Finance · PMU',
-                $cleared->map(function ($r) {
-                    $left    = max(0, (float) $r->grant_amount - (float) $r->tranches->whereNotNull('released_on')->sum('amount'));
-                    $pending = $r->tranches->whereNull('released_on')->isNotEmpty();
-                    return ! $pending && $left > 0.01 ? $this->row($r->expressionOfInterest, 'g5', self::m($left).' still to be disbursed') : null;
-                }));
+            if ($u->can('disburse.approve')) {
+                $add('Payments to approve', 'Matching investment verified — approve, hold or stop the payment (Gate 7).', 'bi-shield-lock', 'warning', 'Payment approver',
+                    $cleared->map(function ($r) use ($next, $u) {
+                        $t = $next($r);
+                        return $t && $t->requested_at && ! $t->approved_at && $t->requested_by !== $u->id
+                            ? $this->row($r->expressionOfInterest, 'g5', $t->label.' · '.self::m($t->amount).' · requested '.$t->requested_at->diffForHumans()) : null;
+                    }));
+            }
+            if ($u->can('disburse.process')) {
+                $add('Payments to process', 'Approved — issue the payment instruction and record the confirmation of payment.', 'bi-cash-coin', 'accent', 'Finance',
+                    $cleared->map(function ($r) use ($next) {
+                        $t = $next($r);
+                        return $t && $t->approved_at ? $this->row($r->expressionOfInterest, 'g5', $t->label.' · '.self::m($t->amount).' · approved '.$t->approved_at->diffForHumans()) : null;
+                    }));
+            }
+            if ($u->canAny(['disburse.process', 'gate5.verify'])) {
+                $add('Schedule the next tranche', 'Nothing left in tranches, but part of the grant is still to be disbursed.', 'bi-calendar-plus', 'muted', 'Finance · PMU',
+                    $cleared->map(function ($r) {
+                        $left    = max(0, (float) $r->grant_amount - (float) $r->tranches->whereNotNull('released_on')->sum('amount'));
+                        $pending = $r->tranches->whereNull('released_on')->isNotEmpty();
+                        return ! $pending && $left > 0.01 ? $this->row($r->expressionOfInterest, 'g5', self::m($left).' still to be disbursed') : null;
+                    }));
+            }
         }
 
         return $tasks;

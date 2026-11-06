@@ -5,6 +5,7 @@ use App\Models\CommitteeReview;
 use App\Models\DueDiligence;
 use App\Models\EnterpriseProfile;
 use App\Models\ExpressionOfInterest;
+use App\Models\GrantReadiness;
 use App\Notifications\EoiAuthorisationUpdate;
 use App\Notifications\EoiGate4Outcome;
 use App\Support\NotifyRecipients;
@@ -19,20 +20,23 @@ use Livewire\Component;
 use Livewire\WithFileUploads;
 
 /*
-| G4 · Final Authorisation (CI Facility Operations Manual §3.5)
+| G5 · Final Authorisation (CI Facility Operations Manual §3.6)  — tab key "g4" kept for existing links
 |   Used in the EOI page:  <livewire:expression-of-interest.authorisation.authorise-application :eoi-id="$eoi->id" />
 |
-|   Gate 3 recommendation → CAFI Managing Director review → MTIBD Principal Secretary final authorisation → Gate 5
-|   Sequential, not concurrent: the Principal Secretary acts only after the Managing Director approves.
+|   Gate 4 Grant readiness → CAFI Managing Director signs the Grant Agreement → MTIBD Principal Secretary signs → Gate 6
+|   Sequential: the Principal Secretary acts only after the Managing Director has signed. Both signatures = formal approval.
+|   Inputs: Grant Readiness Memo + Draft Grant Agreement (Gate 4), Investment Committee recommendation, transaction file.
+|   Opens once the PMU Director of Implementation has approved Gate 4 (older transactions without a Gate 4 record still open).
 |
-|   gate4.md  Managing Director: confirms the 6 review checks, classifies the conditions (§3.5.4), then
-|             Approve & forward · Return for clarification · Not approve
-|   gate4.ps  Principal Secretary: Authorise · Request clarification · Decline
-|   Outcomes (§3.5.5): authorised → Gate 5 · clarification → authorisation_hold (resubmit = new round) · not authorised → not_progressed
+|   gate4.md  Managing Director: confirms the review checks, classifies the conditions, then
+|             Sign & forward · Return for clarification or corrective action · Not approve
+|   gate4.ps  Principal Secretary: Sign (formally approve) · Return for clarification or corrective action · Not approve
+|   Outcomes: formally approved → Gate 6 · returned → authorisation_hold (resubmit = new round) · not approved → not_progressed
 |   Resubmission (PMU gate2.assess or MD): a round held by the PS goes straight back to the PS; one held by the MD restarts at the MD.
 |
 |   Signing outside the system — the MD and PS do not log in. For each authority, the PMU (gate2.assess) or a user with gate4.md / gate4.ps:
-|     1. attaches the document to be signed and records who it was sent to (the PMU sends it themselves — no e-mail from the system),
+|     1. sends the Grant Agreement and records who it was sent to (the PMU sends it themselves — no e-mail from the system).
+|        Default document: the Draft Grant Agreement from Gate 4 for the MD, the MD-signed agreement for the PS.
 |     2. uploads the signed copy when it comes back,
 |     3. records the decision written on it (checks, conditions, decision, comments, date). A signed copy is required.
 |
@@ -100,6 +104,19 @@ new class extends Component
             ->whereNotNull('decided_at')->orderByDesc('round')->first();
     }
 
+    /** Gate 4 · the approved grant readiness review (Grant Readiness Memo + Draft Grant Agreement) */
+    #[Computed] public function readiness(): ?GrantReadiness
+    {
+        return GrantReadiness::where('expression_of_interest_id', $this->eoiId)
+            ->where('outcome', GrantReadiness::OUTCOME_APPROVED)->orderByDesc('round')->first();
+    }
+
+    /** Gate 4 approved — or an older transaction that reached authorisation before Gate 4 existed */
+    #[Computed] public function readinessOk(): bool
+    {
+        return $this->readiness !== null || ! GrantReadiness::where('expression_of_interest_id', $this->eoiId)->exists();
+    }
+
     /** The Gate 2 assessment that went to the Committee */
     #[Computed] public function dd(): ?DueDiligence
     {
@@ -144,7 +161,7 @@ new class extends Component
 
     #[Computed] public function canMd(): bool
     {
-        return ! $this->isApplicant && $this->isOpen && $this->stage === 'md' && auth()->user()->canAny(['gate4.md', 'gate2.assess']);
+        return ! $this->isApplicant && $this->isOpen && $this->readinessOk && $this->stage === 'md' && auth()->user()->canAny(['gate4.md', 'gate2.assess']);
     }
 
     #[Computed] public function canPs(): bool
@@ -178,9 +195,13 @@ new class extends Component
             ->map(fn ($label, $type) => $doc($type) ? [$label, route('enterprise-documents.download', $doc($type))] : null)
             ->filter()->values()->all();
 
+        $gr = $this->readiness;
+
         return [
+            'readiness_memo' => ['Grant Readiness Memo',                'Readiness checks, grant amount, bank verification and outstanding matters (Gate 4)', 'bi-clipboard-check', (bool) $gr, $gr ? [['Download PDF', route('grant-readiness.memo', $gr)], ['Open Gate 4', $tab('readiness')]] : []],
+            'agreement'      => ['Draft Grant Agreement',               'Proposed grant amount, approved grant utilisation budget and terms (Gate 4)',       'bi-file-earmark-text', (bool) $gr?->agreement_path, $gr?->agreement_path ? [['Download', route('grant-readiness.file', [$gr, 'agreement'])]] : []],
             'recommendation' => ['Investment Committee recommendation', 'Formal recommendation and decision rationale',          'bi-people',            (bool) $review,             $review ? [['Open Gate 3', $tab('g3')]] : []],
-            'iam'            => ['Investment Appraisal Memorandum',     'Consolidated transaction assessment',                    'bi-file-earmark-pdf',  (bool) $dd?->iam_path,      $dd?->iam_path ? [['Download', route('due-diligence.memorandum', $dd)]] : []],
+            'iam'            => ['Investment Appraisal Memorandum',     'Consolidated transaction assessment',                    'bi-file-earmark-pdf',  (bool) ($dd && (\App\Models\DueDiligence::memoComplete($dd->memo) || $dd->iam_path)),      $dd && (\App\Models\DueDiligence::memoComplete($dd->memo) || $dd->iam_path) ? [['Download PDF', route('due-diligence.memorandum', $dd)]] : []],
             'tss'            => ['Transaction Summary Sheet',           'Key transaction and financing information',              'bi-file-earmark-text', (bool) $dd,                 $dd ? [['Open', $tab('g2', 'g2-summary')]] : []],
             'dd'             => ['Due diligence findings',              'Enterprise, investor and transaction assessment',        'bi-search',            (bool) $dd,                 $dd ? [['Open', $tab('g2', 'g2-checklist')]] : []],
             'esgc'           => ['ESGC assessment',                     'Risk classification and mitigation measures',            'bi-tree',              (bool) $dd?->esgc_category, $dd ? [['Open', $tab('g2', 'g2-area-esgc')]] : []],
@@ -201,7 +222,7 @@ new class extends Component
 
         $this->authId     = $a?->id;
         $this->round      = $a?->round ?? 1;
-        $this->conditions = $a ? array_values($a->conditions ?? []) : Authorisation::conditionsFrom($this->review);
+        $this->conditions = $a ? array_values($a->conditions ?? []) : Authorisation::conditionsFrom($this->review, $this->readiness);
 
         $checks   = (array) ($a?->md_checks ?? []);
         $this->md = [
@@ -263,7 +284,7 @@ new class extends Component
     public function removeCondition(int $i): void
     {
         abort_unless($this->canMd, 403);
-        abort_unless(($this->conditions[$i]['source'] ?? null) === 'g4', 403, 'Conditions from Gates 2–3 can be resolved but not removed here.');
+        abort_unless(($this->conditions[$i]['source'] ?? null) === 'g4', 403, 'Conditions from Gates 2–4 can be resolved but not removed here.');
         unset($this->conditions[$i]);
         $this->conditions = array_values($this->conditions);
         $this->persist();
@@ -284,7 +305,8 @@ new class extends Component
         abort_unless($this->canRole($role), 403);
 
         $a       = $this->authId ? Authorisation::find($this->authId) : null;
-        $hasFile = (bool) $a?->{"{$role}_request_path"};
+        $default = $this->defaultDocument($role, $a);   // Gate 4 draft agreement (MD) / MD-signed agreement (PS)
+        $hasFile = (bool) $a?->{"{$role}_request_path"} || $default !== null;
 
         $this->validate([
             "signing.$role.name"    => ['required', 'string', 'max:255'],
@@ -292,7 +314,7 @@ new class extends Component
             "signing.$role.message" => ['nullable', 'string', 'max:3000'],
             "requestFile.$role"     => [$hasFile ? 'nullable' : 'required', 'file', 'mimes:'.Authorisation::REQUEST_MIMES, 'max:'.Authorisation::MAX_KB],
         ], [
-            "requestFile.$role.required" => 'Attach the document to be signed.',
+            "requestFile.$role.required" => 'Attach the Grant Agreement to be signed.',
             "requestFile.$role.mimes"    => 'Attach a PDF or Word document.',
             "requestFile.$role.max"      => 'The document must be '.(Authorisation::MAX_KB / 1024).' MB or smaller.',
         ], [
@@ -310,6 +332,12 @@ new class extends Component
                 "{$role}_request_path" => $file->store("authorisations/{$a->id}", Authorisation::DISK),
                 "{$role}_request_name" => $file->getClientOriginalName(),
             ]);
+        } elseif (! $a->{"{$role}_request_path"} && ($default = $this->defaultDocument($role, $a))) {
+            // No upload: send the Gate 4 Draft Grant Agreement (MD) / the agreement the MD signed (PS) — a copy is kept with this round
+            [$disk, $path, $name] = $default;
+            $copy = "authorisations/{$a->id}/".Str::random(8).'-'.basename($path);
+            Storage::disk(Authorisation::DISK)->put($copy, Storage::disk($disk)->get($path));
+            $a->forceFill(["{$role}_request_path" => $copy, "{$role}_request_name" => $name]);
         }
 
         $a->forceFill([
@@ -321,7 +349,25 @@ new class extends Component
         ])->save();
 
         unset($this->requestFile[$role], $this->auth);
-        $this->dispatch('notify', type: 'success', message: 'Recorded as sent to '.$a->{"{$role}_signer_name"}.' for signing. Download the document and send it to them.');
+        $this->dispatch('notify', type: 'success', message: 'Recorded as sent to '.$a->{"{$role}_signer_name"}.' for signing. Download the Grant Agreement and send it to them.');
+    }
+
+    /**
+     * The document to send when nothing is uploaded: [disk, path, name] or null.
+     *   md → the Draft Grant Agreement from Gate 4 · ps → the Grant Agreement signed by the Managing Director
+     */
+    public function defaultDocument(string $role, ?Authorisation $a = null): ?array
+    {
+        $a ??= $this->authId ? Authorisation::find($this->authId) : null;
+
+        if ($role === 'md' && ($gr = $this->readiness) && $gr->agreement_path && Storage::disk(GrantReadiness::DISK)->exists($gr->agreement_path)) {
+            return [GrantReadiness::DISK, $gr->agreement_path, $gr->agreement_name ?: 'Draft Grant Agreement'];
+        }
+        if ($role === 'ps' && $a?->md_signed_path && Storage::disk(Authorisation::DISK)->exists($a->md_signed_path)) {
+            return [Authorisation::DISK, $a->md_signed_path, 'MD-signed '.($a->md_signed_name ?: 'Grant Agreement')];
+        }
+
+        return null;
     }
 
     /** The signed copy came back → upload it (saved straight away) */
@@ -392,7 +438,7 @@ new class extends Component
         }
 
         if ($decision === 'approve' && $this->blockers) {
-            $this->addError('md.decision', 'Not ready to approve — see the list above.');
+            $this->addError('md.decision', 'Not ready to sign — see the list above.');
             return;
         }
 
@@ -411,7 +457,7 @@ new class extends Component
         $notes = $this->emailDecision('md');
 
         $this->afterDecision(($decision === 'approve'
-            ? 'Approved and forwarded to the MTIBD Principal Secretary.'
+            ? 'Signed by the Managing Director and forwarded to the MTIBD Principal Secretary.'
             : 'Managing Director decision recorded: '.Authorisation::MD_DECISIONS[$decision][0].'.').' '.$notes);
     }
 
@@ -429,7 +475,7 @@ new class extends Component
             'ps.on'       => ['required', 'date', 'before_or_equal:today'],
         ], [
             'ps.decision.required' => 'Choose a decision.',
-            'ps.comments.required' => ($this->ps['decision'] ?? null) === 'clarify' ? 'Say what further information is required.' : 'Record the reason for declining.',
+            'ps.comments.required' => ($this->ps['decision'] ?? null) === 'clarify' ? 'Say what must be clarified or corrected.' : 'Record why the agreement is not signed.',
         ]);
 
         if (! $this->auth?->hasSignedCopy('ps')) {
@@ -453,7 +499,7 @@ new class extends Component
         // E-mails (after the decision is saved)
         $notes = $this->emailDecision('ps');
 
-        $this->afterDecision('Final authorisation recorded: '.Authorisation::OUTCOMES[$outcome][0].'. '.$notes);
+        $this->afterDecision('Gate 5 outcome recorded: '.Authorisation::OUTCOMES[$outcome][0].'. '.$notes);
     }
 
     /* =====================================================================
@@ -667,17 +713,18 @@ new class extends Component
         default                                    => 'todo',
     };
     $path = [
-        ['Gate 3 · Committee recommendation', 'done'],
-        ['Managing Director review', $mdState],
-        ['Principal Secretary authorisation', $psState],
-        ['Gate 5 · Conditions precedent & Grant Agreement', $outcome === 'authorised' ? 'current' : 'todo'],
+        ['Gate 4 · Grant readiness', $this->readiness ? 'done' : ($this->readinessOk ? 'done' : 'current')],
+        ['Managing Director signature', $mdState],
+        ['Principal Secretary signature', $psState],
+        ['Gate 6 · Conditions precedent & onboarding', $outcome === 'authorised' ? 'current' : 'todo'],
     ];
     $pathIcon = ['done' => 'bi-check-lg', 'current' => 'bi-hourglass-split', 'returned' => 'bi-arrow-return-left', 'failed' => 'bi-x-lg', 'todo' => 'bi-circle'];
 
     $headPill = match (true) {
         $decided            => [$A::OUTCOMES[$outcome][0], $A::OUTCOMES[$outcome][4], $A::OUTCOMES[$outcome][3]],
-        $stage === 'ps'     => ['Awaiting Principal Secretary', 'pill-warn', 'bi-hourglass-split'],
-        default             => ['Awaiting Managing Director', 'pill-warn', 'bi-hourglass-split'],
+        ! $this->readinessOk => ['Waiting for Gate 4', 'pill-muted', 'bi-lock'],
+        $stage === 'ps'     => ['Awaiting Principal Secretary signature', 'pill-warn', 'bi-hourglass-split'],
+        default             => ['Awaiting Managing Director signature', 'pill-warn', 'bi-hourglass-split'],
     };
 @endphp
 
@@ -687,12 +734,12 @@ new class extends Component
 @if (! $this->gateOpen)
     <section class="section-card">
         <div class="section-card-head">
-            <span class="section-no">G4</span>
+            <span class="section-no">G5</span>
             <h5 class="me-auto">Final authorisation</h5>
             <span class="pill pill-muted"><i class="bi bi-lock-fill"></i> Locked</span>
         </div>
-        <p class="small text-muted mb-0">Opens once the Investment Committee recommends the transaction (Approve or Conditional approval at Gate 3).
-            The recommendation is then reviewed by the CAFI Managing Director and authorised by the MTIBD Principal Secretary.</p>
+        <p class="small text-muted mb-0">Opens once Gate 4 · Grant readiness is approved by the PMU Director of Implementation.
+            The Grant Agreement is then signed by the CAFI Managing Director and, after that, by the MTIBD Principal Secretary — both signatures constitute formal approval of the grant.</p>
     </section>
 
 {{-- ======================================================================
@@ -701,15 +748,15 @@ new class extends Component
 @elseif ($this->isApplicant)
     <section class="section-card">
         <div class="section-card-head">
-            <span class="section-no">G4</span>
+            <span class="section-no">G5</span>
             <h5 class="me-auto">Final authorisation</h5>
             <span class="pill {{ $decided ? $A::OUTCOMES[$outcome][4] : 'pill-warn' }}"><i class="bi {{ $decided ? $A::OUTCOMES[$outcome][3] : 'bi-hourglass-split' }}"></i> {{ $decided ? $A::OUTCOMES[$outcome][0] : 'In progress' }}</span>
         </div>
         <p class="small text-muted mb-0">
-            @if (! $decided) The Investment Committee's recommendation is with CAFI management for final authorisation.
-            @elseif ($outcome === 'authorised') Your transaction has been authorised. The next step is meeting the conditions precedent and signing the Grant Agreement. Authorisation does not itself trigger payment.
+            @if (! $decided) Your Grant Agreement is with CAFI management for signature.
+            @elseif ($outcome === 'authorised') Your grant has been formally approved — the Grant Agreement has been signed by the CAFI Managing Director and the MTIBD Principal Secretary. The next step is meeting the conditions precedent and onboarding. Approval does not itself trigger payment.
             @elseif ($outcome === 'clarification') Further information is being prepared before authorisation can be completed. The LEHSFF team will contact you if anything is needed from you.
-            @else Your transaction did not receive final authorisation and will not proceed further.
+            @else Your grant was not approved and will not proceed further.
             @endif
         </p>
         @if ($outcome === 'authorised' && $openConds)
@@ -736,13 +783,13 @@ new class extends Component
         @endforeach
     </div>
 
-    {{-- ============================ G4 · AUTHORISATION DETAILS (§3.5.6) ============================ --}}
+    {{-- ============================ G5 · AUTHORISATION DETAILS — decision recording ============================ --}}
     <section class="section-card">
         <div class="section-card-head">
-            <span class="section-no">G4</span>
+            <span class="section-no">G5</span>
             <div class="me-auto">
                 <h5>Final authorisation @if ($round > 1) <span class="pill pill-muted ms-1">Round {{ $round }}</span> @endif</h5>
-                <div class="small text-muted">Has the transaction been properly assessed and recommended within the CAFI framework, so the grant can proceed to contracting?</div>
+                <div class="small text-muted">Formal approval of the grant through the sequential signing of the Grant Agreement by the CAFI Managing Director and the MTIBD Principal Secretary.</div>
             </div>
             <span class="pill {{ $headPill[1] }}"><i class="bi {{ $headPill[2] }}"></i> {{ $headPill[0] }}</span>
         </div>
@@ -753,13 +800,21 @@ new class extends Component
                 <span wire:loading class="ms-1"><span class="spinner-border spinner-border-sm"></span></span>
             </div>
         @elseif (! $decided && $eoi->status === 'authorisation' && ! auth()->user()->canAny(['gate4.md', 'gate4.ps', 'gate2.assess']))
-            <div class="small text-muted mb-3"><i class="bi bi-eye me-1"></i> Read-only — the PMU sends the authorisation documents for signing and records the signed decisions.</div>
+            <div class="small text-muted mb-3"><i class="bi bi-eye me-1"></i> Read-only — the PMU sends the Grant Agreement for signing and records the signed decisions.</div>
+        @endif
+
+        @if (! $this->readinessOk && ! $decided)
+            <div class="callout callout-warning small mb-3">
+                <i class="bi bi-lock me-1"></i> Waiting for <strong>Gate 4 · Grant readiness</strong> — the Grant Readiness Memo and Draft Grant Agreement must be approved by the Hub Manager and the PMU Director of Implementation first.
+                <a href="{{ route('expression-of-interest.show', $eoi->id) }}?tab=readiness" class="ms-1">Open Gate 4</a>
+            </div>
         @endif
 
         <div class="callout small mb-3">
             <i class="bi bi-envelope-paper me-1"></i>
-            The Managing Director and the Principal Secretary sign outside the system: for each of them, <strong>1</strong> attach the document and send it to them yourself,
-            <strong>2</strong> upload the signed copy when it comes back, <strong>3</strong> record the decision written on it. The Principal Secretary's step opens once the Managing Director has approved.
+            The Managing Director and the Principal Secretary sign the Grant Agreement outside the system: for each of them, <strong>1</strong> send them the agreement yourself
+            (the Gate 4 Draft Grant Agreement is used for the MD, and the MD-signed copy for the PS, unless you attach another file), <strong>2</strong> upload the signed copy when it comes back,
+            <strong>3</strong> record the decision written on it. The Principal Secretary's step opens once the Managing Director has signed.
             Recording a decision e-mails the PMU (and, on a final outcome, the applicant, the Committee and Finance).
         </div>
 
@@ -774,6 +829,12 @@ new class extends Component
             <div><dt>Transaction reference</dt><dd><span class="chip">{{ $eoi->reference }}</span></dd></div>
             <div><dt>Enterprise</dt><dd>{{ $p?->registered_name ?: ($eoi->business_name ?: '—') }}</dd></div>
             <div><dt>Investor(s)</dt><dd>{{ $this->dd?->investor_names ?: ($p?->investor_name ?: ($eoi->investor_name ?: '—')) }}</dd></div>
+            <div><dt>Gate 4 · readiness</dt>
+                <dd>@if ($this->readiness)
+                        <span class="pill pill-ok"><i class="bi bi-check2-circle"></i> Approved to proceed</span>
+                        <span class="small text-muted">· {{ $this->readiness->decided_at->format('d M Y') }}</span>
+                    @elseif ($this->readinessOk) <span class="small text-muted">Not required (before Gate 4 was introduced)</span>
+                    @else <span class="pill pill-warn">Pending</span> @endif</dd></div>
             <div><dt>Committee outcome</dt>
                 <dd>@if ($review)
                         <span class="pill {{ $CR::OUTCOMES[$review->outcome][4] }}"><i class="bi {{ $CR::OUTCOMES[$review->outcome][3] }}"></i> {{ $CR::OUTCOMES[$review->outcome][0] }}</span>
@@ -782,13 +843,14 @@ new class extends Component
             <div><dt>Approved private investment</dt><dd>{{ $m($private) }} <div class="small text-muted">{{ $u($private) }}</div></dd></div>
             <div><dt>Approved CAFI grant</dt><dd>{{ $m($grant) }} <div class="small text-muted">{{ $u($grant) }}</div></dd></div>
             <div><dt>Instrument</dt><dd>{{ $DD::INSTRUMENTS[$instrument ?? ''] ?? '—' }}</dd></div>
-            <div><dt>Authorised next stage</dt><dd class="{{ $outcome ? '' : 'text-faint' }}">{{ $a?->nextStage() ?? 'Managing Director review' }}</dd></div>
+            <div><dt>Outstanding actions</dt><dd>{{ $openConds ? $openConds.' open '.\Illuminate\Support\Str::plural('condition', $openConds) : 'None' }} <a href="#g4-conditions" class="small ms-1">See conditions</a></dd></div>
+            <div><dt>Authorised next stage</dt><dd class="{{ $outcome ? '' : 'text-faint' }}">{{ $a?->nextStage() ?? 'Managing Director signature' }}</dd></div>
         </div>
 
         <div class="callout small mt-3 mb-0">
             <i class="bi bi-info-circle me-1"></i>
-            Gate 4 confirms institutional authorisation of a transaction already assessed (Gate 2) and recommended (Gate 3) — it does not reopen the technical assessment.
-            Authorisation allows contracting and conditions precedent; it does <strong>not</strong> trigger payment.
+            Gate 5 confirms institutional authorisation of a transaction already assessed (Gate 2), recommended (Gate 3) and prepared (Gate 4) — it does not reopen the technical assessment.
+            Formal approval leads to conditions precedent and onboarding (Gate 6); it does <strong>not</strong> trigger payment.
         </div>
     </section>
 
@@ -802,7 +864,7 @@ new class extends Component
             <span class="section-no"><i class="bi bi-folder2-open"></i></span>
             <div class="me-auto">
                 <h5>Transaction file</h5>
-                <div class="small text-muted">What the authorising authorities receive — evidence that the transaction passed Gates 1–3.</div>
+                <div class="small text-muted">What the signing authorities receive: the Grant Readiness Memo, the Draft Grant Agreement, the Committee recommendation and supporting documents.</div>
             </div>
             <span class="pill {{ $included === count($file) ? 'pill-ok' : 'pill-warn' }}">{{ $included }} / {{ count($file) }} included</span>
         </div>
@@ -811,7 +873,7 @@ new class extends Component
             <div class="file-row flex-wrap" wire:key="file-{{ $key }}">
                 <span class="file-row-icon"><i class="bi {{ $icon }}"></i></span>
                 <div class="flex-grow-1 small overflow-hidden" style="min-width: 200px">
-                    <div class="fw-semibold text-navy">{{ $doc }} @if (in_array($key, ['recommendation', 'iam'], true)) <span class="pill pill-muted ms-1">Key document</span> @endif</div>
+                    <div class="fw-semibold text-navy">{{ $doc }} @if (in_array($key, ['readiness_memo', 'agreement', 'recommendation'], true)) <span class="pill pill-muted ms-1">Key input</span> @endif</div>
                     <div class="text-muted text-truncate">{{ $purpose }} @if ($key === 'conditions') · {{ $openConds }} open @endif</div>
                 </div>
                 @if ($present)
@@ -833,10 +895,10 @@ new class extends Component
         <div class="section-card-head">
             <span class="section-no">1</span>
             <div class="me-auto">
-                <h5>CAFI Managing Director review</h5>
+                <h5>CAFI Managing Director review and signature</h5>
                 <div class="small text-muted">
                     @if ($mdDone) Signed by {{ $a->signerName('md') }} on {{ $a->md_on?->format('d M Y') }} · recorded by {{ $a->managingDirector?->name ?? '—' }} on {{ $a->md_decided_at->format('d M Y H:i') }}.
-                    @else Attach the document and send it for signing, upload the signed copy, then record what the Managing Director decided. @endif
+                    @else Send the Grant Agreement for signing, upload the signed copy, then record what the Managing Director decided. @endif
                 </div>
             </div>
             @if ($mdDone)
@@ -847,7 +909,7 @@ new class extends Component
             @endif
         </div>
 
-        @include('expression-of-interest.authorisation.partials.signing', ['role' => 'md', 'a' => $a, 'can' => $canMd, 'signing' => $signing, 'decidedRole' => $mdDone])
+        @include('expression-of-interest.authorisation.partials.signing', ['role' => 'md', 'a' => $a, 'can' => $canMd, 'signing' => $signing, 'decidedRole' => $mdDone, 'defaultDoc' => $canMd ? $this->defaultDocument('md', $a) : null])
 
         @if ($canMd && ! $a?->hasSignedCopy('md'))
             <div class="small text-muted mb-2"><i class="bi bi-info-circle me-1"></i> You can fill in step 3 while waiting; the decision can only be recorded once the signed copy is uploaded.</div>
@@ -874,11 +936,11 @@ new class extends Component
         @if ($canMd)
             @if ($this->blockers)
                 <div class="callout callout-warning small mb-3">
-                    <div class="fw-semibold mb-1"><i class="bi bi-list-check me-1"></i> Before you can approve ({{ count($this->blockers) }})</div>
+                    <div class="fw-semibold mb-1"><i class="bi bi-list-check me-1"></i> Before the Managing Director can sign ({{ count($this->blockers) }})</div>
                     <ul class="evidence-list mb-0">@foreach ($this->blockers as $b) <li>{{ $b }}</li> @endforeach</ul>
                 </div>
             @else
-                <div class="callout callout-success small mb-3"><i class="bi bi-check2-circle me-1"></i> Ready to approve and forward to the Principal Secretary.</div>
+                <div class="callout callout-success small mb-3"><i class="bi bi-check2-circle me-1"></i> Ready to sign and forward to the Principal Secretary.</div>
             @endif
         @endif
 
@@ -934,10 +996,10 @@ new class extends Component
         <div class="section-card-head">
             <span class="section-no">2</span>
             <div class="me-auto">
-                <h5>MTIBD Principal Secretary — final authorisation</h5>
+                <h5>MTIBD Principal Secretary review and signature</h5>
                 <div class="small text-muted">
                     @if ($psDone) Signed by {{ $a->signerName('ps') }} on {{ $a->ps_on?->format('d M Y') }} · recorded by {{ $a->principalSecretary?->name ?? '—' }} on {{ $a->ps_decided_at->format('d M Y H:i') }}.
-                    @else The final institutional approval in the CAFI governance chain — signed outside the system. @endif
+                    @else The second signature on the Grant Agreement — completing both signatures constitutes formal approval of the grant. @endif
                 </div>
             </div>
             @if ($psDone)
@@ -954,8 +1016,8 @@ new class extends Component
             <div class="g1-locked">
                 <i class="bi bi-lock"></i>
                 <div>
-                    @if ($mdDone && $a->md_decision !== 'approve') Not reached — the Managing Director did not forward the transaction.
-                    @else Opens once the Managing Director has approved and forwarded the transaction. The reviews are sequential, not concurrent. @endif
+                    @if ($mdDone && $a->md_decision !== 'approve') Not reached — the Managing Director did not sign the Grant Agreement.
+                    @else Opens once the Managing Director has signed the Grant Agreement and forwarded it. The signatures are sequential. @endif
                 </div>
             </div>
         @else
@@ -963,7 +1025,7 @@ new class extends Component
                 <div class="quote mb-3">{{ $a->md_comments }}<div class="quote-meta">Managing Director ({{ $a->signerName('md') }}) · {{ $a->md_on?->format('d M Y') }}</div></div>
             @endif
 
-            @include('expression-of-interest.authorisation.partials.signing', ['role' => 'ps', 'a' => $a, 'can' => $canPs, 'signing' => $signing, 'decidedRole' => $psDone])
+            @include('expression-of-interest.authorisation.partials.signing', ['role' => 'ps', 'a' => $a, 'can' => $canPs, 'signing' => $signing, 'decidedRole' => $psDone, 'defaultDoc' => $canPs ? $this->defaultDocument('ps', $a) : null])
 
             <div class="d-flex align-items-center gap-2 mb-2">
                 <span class="pill {{ $psDone ? 'pill-ok' : 'pill-warn' }}">3</span>
@@ -988,7 +1050,7 @@ new class extends Component
                     <label class="form-label small fw-semibold">Comments @if ($canPs && ($ps['decision'] ?? null) && $ps['decision'] !== 'authorise') <span class="req">*</span> @endif</label>
                     @if ($canPs)
                         <textarea rows="3" class="form-control @error('ps.comments') is-invalid @enderror" wire:model.blur="ps.comments"
-                                  placeholder="{{ ($ps['decision'] ?? null) === 'clarify' ? 'What further information is required' : (($ps['decision'] ?? null) === 'decline' ? 'Reason authorisation is declined' : 'Optional') }}"></textarea>
+                                  placeholder="{{ ($ps['decision'] ?? null) === 'clarify' ? 'What must be clarified or corrected' : (($ps['decision'] ?? null) === 'decline' ? 'Why the agreement is not signed' : 'Optional') }}"></textarea>
                         @error('ps.comments') <div class="invalid-feedback">{{ $message }}</div> @enderror
                     @else
                         <div class="quote mb-0">{{ $ps['comments'] ?: 'No comments.' }}</div>
@@ -1009,7 +1071,7 @@ new class extends Component
                 <div class="d-flex flex-wrap gap-2 mt-4 pt-3 border-top">
                     <button type="button" class="btn btn-brand ms-auto" wire:click="recordPs" wire:loading.attr="disabled" wire:target="recordPs"
                             wire:confirm="Record the Principal Secretary's signed decision? It can't be changed afterwards. The PMU will be e-mailed — and, if authorised or declined, the applicant, the Committee and Finance too.">
-                        <span wire:loading.remove wire:target="recordPs"><i class="bi bi-patch-check me-1"></i> Record final authorisation</span>
+                        <span wire:loading.remove wire:target="recordPs"><i class="bi bi-patch-check me-1"></i> Record Principal Secretary decision</span>
                         <span wire:loading wire:target="recordPs"><span class="spinner-border spinner-border-sm me-1"></span> Recording…</span>
                     </button>
                 </div>
@@ -1094,10 +1156,10 @@ new class extends Component
         <div class="section-card-head">
             <span class="section-no">4</span>
             <div class="me-auto">
-                <h5>Gate 4 outcome &amp; handover</h5>
+                <h5>Gate 5 outcome &amp; handover</h5>
                 <div class="small text-muted">
                     @if ($decided) Round {{ $round }} closed on {{ $a->decided_at->format('d M Y H:i') }}.
-                    @else Recorded once both approvals are in — or as soon as either authority returns or declines. @endif
+                    @else Recorded once both signatures are in — or as soon as either signatory returns the agreement or does not approve. @endif
                 </div>
             </div>
             @if ($decided) <span class="pill {{ $A::OUTCOMES[$outcome][4] }}"><i class="bi {{ $A::OUTCOMES[$outcome][3] }}"></i> {{ $A::OUTCOMES[$outcome][0] }}</span> @endif
@@ -1140,12 +1202,12 @@ new class extends Component
 
         @if ($outcome === 'authorised')
             <div class="callout callout-success small mb-0">
-                <i class="bi bi-box-arrow-in-right me-1"></i> Handed over to <strong>Gate 5</strong> for conditions precedent and the Grant Agreement
+                <i class="bi bi-box-arrow-in-right me-1"></i> Fully executed Grant Agreement — handed over to <strong>Gate 6</strong> for conditions precedent and onboarding
                 @if ($openConds) — {{ $openConds }} {{ \Illuminate\Support\Str::plural('condition', $openConds) }} to be met. @else. @endif
-                Payment is only made after Gate 5.
+                Disbursement remains subject to the conditions precedent and financial controls.
             </div>
         @elseif ($outcome === 'not_authorised')
-            <div class="callout callout-warning small mb-0"><i class="bi bi-x-octagon me-1"></i> The transaction exits the process and does not proceed to contracting or disbursement. The applicant has been notified by e-mail.</div>
+            <div class="callout callout-warning small mb-0"><i class="bi bi-x-octagon me-1"></i> The grant did not receive the required signatures and cannot proceed. The applicant has been notified by e-mail.</div>
         @elseif ($outcome === 'clarification')
             <div class="callout callout-warning small mb-3">
                 <i class="bi bi-arrow-return-left me-1"></i>
@@ -1165,7 +1227,7 @@ new class extends Component
         @else
             <div class="empty-state py-4">
                 <div class="empty-icon"><i class="bi bi-box-arrow-in-right"></i></div>
-                <p class="small text-muted mb-0">Once both approvals are recorded, the transaction is handed over to <strong>Gate 5</strong> for conditions precedent and the Grant Agreement.</p>
+                <p class="small text-muted mb-0">Once both signatures are recorded, the transaction is handed over to <strong>Gate 6</strong> for conditions precedent and onboarding.</p>
             </div>
         @endif
     </section>

@@ -2,7 +2,9 @@
 
 use App\Models\EnterpriseProfile;
 use App\Models\ExpressionOfInterest;
+use App\Notifications\EoiSubmitted;
 use App\Services\EoiScreeningService;
+use App\Support\NotifyRecipients;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -204,19 +206,55 @@ new class extends Component
             throw $e;
         }
 
+        $resubmitted = $this->mode === 'edit';
+
         $eoi = $this->persist(ExpressionOfInterest::STATUS_SUBMITTED);
         if (! $eoi) {
             return;
         }
 
-        $message = $this->mode === 'edit'
+        $this->sendSubmissionEmails($eoi, $resubmitted);
+
+        $message = $resubmitted
             ? "Application {$eoi->reference} has been updated and resubmitted."
-            : "Your Expression of Interest {$eoi->reference} has been submitted.";
+            : "Your Expression of Interest {$eoi->reference} has been submitted. A confirmation e-mail is on its way.";
 
         $this->closeDrawer();
         $this->dispatch('notify', type: 'success', message: $message);
         $this->dispatch('application-saved');
         $this->resetDrawer();
+    }
+
+    /**
+     * E-mails on submission:
+     *   the applicant → confirmation with the reference (account e-mail, and the EOI contact e-mail if different)
+     *   PMU officers  → a new application to screen (gate1.decide / gate2.assess)
+     * A mail failure is logged and never stops the submission.
+     */
+    protected function sendSubmissionEmails(ExpressionOfInterest $eoi, bool $resubmitted): void
+    {
+        $eoi->loadMissing('user');
+
+        try {
+            if ($eoi->user) {
+                $eoi->user->notify(new EoiSubmitted($eoi, EoiSubmitted::APPLICANT, $resubmitted));
+            }
+
+            // The EOI's contact e-mail, when it is not the account's e-mail
+            if (filled($eoi->email) && strcasecmp((string) $eoi->email, (string) $eoi->user?->email) !== 0) {
+                \Illuminate\Support\Facades\Notification::route('mail', $eoi->email)
+                    ->notify(new EoiSubmitted($eoi, EoiSubmitted::APPLICANT, $resubmitted));
+            }
+        } catch (\Throwable $e) {
+            report($e);
+        }
+
+        NotifyRecipients::send(
+            NotifyRecipients::anyOf(['gate1.decide', 'gate2.assess']),
+            new EoiSubmitted($eoi, EoiSubmitted::PMU, $resubmitted),
+            'the PMU',
+            except: (int) auth()->id(),
+        );
     }
 
     /**

@@ -141,14 +141,14 @@ new class extends Component
      * Registration documents only appear when they apply to the applicant's answers (OBFC / other country).
      */
     protected const CRITERIA_DOCS = [
-        'enterprise'   => ['registration_cert', 'registration_undertaking', 'foreign_registration', 'shareholders_list'],
+        'enterprise'   => ['registration_cert', 'registration_undertaking', 'foreign_registration', 'business_extract', 'shareholders_list', 'good_standing'],
         'investor'     => ['cap_table', 'shareholders_list'],
         'commitment'   => ['commitment'],
-        'transaction'  => ['commitment'],
+        'transaction'  => ['commitment', 'cap_table'],
         'funding'      => ['financials', 'projections'],
-        'use_of_funds' => ['budget', 'business_plan'],
-        'alignment'    => ['employee_list'],
-        'exclusions'   => ['key_individuals', 'ids', 'team_resumes', 'tax_clearance'],
+        'use_of_funds' => ['budget', 'business_plan', 'pitch_deck'],
+        'alignment'    => ['employee_list', 'business_plan', 'pitch_deck'],
+        'exclusions'   => ['ids', 'team_resumes', 'business_extract', 'tax_clearance'],
     ];
 
     /** The applicant's enterprise profile (null if never started) */
@@ -185,6 +185,20 @@ new class extends Component
         $checks  = fn (array $defs, ?array $values) => collect($defs)->map(fn ($text, $k) => [$text, ! empty($values[$k])])->values()->all();
 
         $profileOnly = fn (array $rows) => $p ? $rows : [];
+        $yn          = fn ($v) => $v === null ? null : ($v ? 'Yes' : 'No');
+        $ynp         = fn ($v) => EnterpriseProfile::YES_NO_PROGRESS[$v ?? ''] ?? null;
+        $people      = fn (array $rows, array $parts) => collect($rows)
+            ->map(fn ($r) => trim($r['name'].' — '.collect($parts)->map(fn ($fmt, $k) => filled($r[$k] ?? null) ? sprintf($fmt, $r[$k]) : null)->filter()->implode(' · '), ' —'))
+            ->all() ?: null;
+
+        // Profile figures used in several criteria (Maloti)
+        $investorLsl = $p?->investorAmount();
+        $grant       = $p ? (float) $p->grant_requested : null;
+        $budget      = $p?->budgetTotals() ?? ['private' => 0, 'grant' => 0];
+        $budgetSet   = $p && ($budget['private'] > 0 || $budget['grant'] > 0);
+        $breakdown   = $p?->employeeBreakdownTotal();
+        $esFlags     = $p && $p->es_checklist ? $p->esScreening() : [];
+        $shareTotal  = $p?->shareholderTotal() ?? 0;
 
         $ev = [
             'enterprise' => [
@@ -195,15 +209,34 @@ new class extends Component
                 $eoiRow('Full-time employees', $num($eoi->full_time_employees)),
                 $eoiRow('Annual turnover', $l('annual_turnover', $eoi->annual_turnover)),
                 ...$profileOnly([
-                    $proRow('Registered name', $p?->registered_name),
+                    $proRow('Registered name', $p?->registered_name, $p?->short_name ? 'Also known as '.$p->short_name : null),
                     $proRow('Address', collect([$p?->address, $p?->city, $p?->district])->filter()->implode(', ') ?: null),
-                    $proRow('Registered at OBFC', $p?->obfc_registered === null ? null : ($p->obfc_registered ? 'Yes' : 'No'), null, $p?->obfc_registered === false ? 'bad' : null),
-                    $proRow('Registration no.', $p?->registration_no),
+                    $proRow('Registered with the OBFC', $ynp($p?->obfc_status ?? ($p?->obfc_registered === null ? null : ($p->obfc_registered ? 'yes' : 'no'))),
+                        match ($p?->obfc_status) {
+                            'in_progress' => 'Registration in progress — no grant can be paid until registered',
+                            'no'          => 'Not registered — signed undertaking to register required',
+                            default       => null,
+                        },
+                        match ($p?->obfc_status) { 'yes' => 'ok', 'no', 'in_progress' => 'bad', default => null }),
+                    $proRow('Registration no.', $p?->registration_no, $p?->year_registered ? 'Registered in '.$p->year_registered : null),
                     $proRow('Type of registration', $p?->legal_form),
-                    $proRow('Registered in another country', $p?->foreign_registered ? ($p->foreign_country ?: 'Yes') : ($p?->foreign_registered === false ? 'No' : null)),
-                    $proRow('Year established', $p?->year_established),
+                    $proRow('Registered in another country', $p?->foreign_registered ? ($p->foreign_country ?: 'Yes') : ($p?->foreign_registered === false ? 'No' : null),
+                        $p?->foreign_registered && $p->foreign_registration_no ? 'Registration no. '.$p->foreign_registration_no : null),
+                    $proRow('Foreign-owned', $yn($p?->foreign_owned),
+                        $p?->foreign_owned && $p->foreign_owned_pct !== null ? $p->foreign_owned_pct.'% foreign ownership' : null),
+                    $proRow('Primary operations in Lesotho', $yn($p?->primary_ops_lesotho), $p?->primary_ops_lesotho === false ? 'Main operations are outside Lesotho' : null,
+                        $p?->primary_ops_lesotho === false ? 'bad' : ($p?->primary_ops_lesotho ? 'ok' : null)),
+                    $proRow('Tax file with RSL', $ynp($p?->rsl_tax_file), null, $p?->rsl_tax_file === 'yes' ? 'ok' : null),
+                    $proRow('Operating since', $p?->commencedLabel(),
+                        $p?->operatingUnderSixMonths() ? 'Operating for less than 6 months' : ($p?->monthsOperating() !== null ? $p->monthsOperating().' months of operation' : null),
+                        $p?->operatingUnderSixMonths() ? 'bad' : null),
                     $proRow('Stage of development', EnterpriseProfile::STAGES[$p?->company_stage ?? ''] ?? null),
-                    $proRow('Sector', $p?->sector),
+                    $proRow('Sector', $p?->sectorLabel(), $p?->sub_sector ? 'Sub-sector: '.$p->sub_sector : null),
+                    $proRow('Shareholders', $people($p?->shareholderRows() ?? [], ['nationality' => '%s', 'gender' => '%s', 'age' => 'age %s', 'percent' => '%s%%']),
+                        $p?->shareholderRows()
+                            ? 'Total '.rtrim(rtrim(number_format($shareTotal, 2), '0'), '.').'%'.(abs($shareTotal - 100) >= 0.01 ? ' — does not add up to 100%' : '')
+                            : ($p?->document('shareholders_list') ? 'Uploaded as a document (see below)' : null),
+                        $p?->shareholderRows() ? (abs($shareTotal - 100) < 0.01 ? 'ok' : 'bad') : null),
                     $proRow('Ownership', $p?->ownershipLine()),
                     $proRow('Business activity', $p?->activity),
                 ]),
@@ -212,9 +245,17 @@ new class extends Component
                 $eoiRow('Investor', $eoi->investor_name),
                 $eoiRow('Investor status', $l('investor_status', $eoi->investor_status), $eoi->investor_status === 'other' ? $eoi->investor_status_other : null),
                 ...$profileOnly([
+                    $proRow('Has a participating investor', $yn($p?->has_investor),
+                        $p?->has_investor === false ? 'No investor — the matching grant cannot be calculated' : null,
+                        $p?->has_investor === false ? 'bad' : ($p?->has_investor ? 'ok' : null)),
                     $proRow('Investors in the round', collect($p?->investorRows() ?? [])
-                        ->map(fn ($r) => $r['name'].(filled($r['country'] ?? null) ? ' ('.$r['country'].')' : '').(filled($r['ticket'] ?? null) ? ' — M '.number_format((float) $r['ticket']) : ''))
-                        ->all() ?: null),
+                        ->map(fn ($r) => $r['name']
+                            .(filled($r['id_number'] ?? null) ? ' · ID/Reg. '.$r['id_number'] : '')
+                            .(filled($r['country'] ?? null) ? ' ('.$r['country'].')' : '')
+                            .(filled($r['ticket'] ?? null) ? ' — M '.number_format((float) $r['ticket']).' (US$ '.number_format((float) $r['ticket'] / max($rate, 0.0001)).')' : ' — no amount'))
+                        ->all() ?: null,
+                        collect($p?->investorRows() ?? [])->contains(fn ($r) => blank($r['id_number'] ?? null)) ? 'Some investors have no ID / passport / registration number' : null,
+                        collect($p?->investorRows() ?? [])->contains(fn ($r) => blank($r['id_number'] ?? null)) ? 'bad' : null),
                     $proRow('Lead investor type', $p?->investor_type),
                     $proRow('Financing type', EnterpriseProfile::PARTICIPATION[$p?->participation ?? ''] ?? $p?->participation),
                     $proRow('Investment history', $p ? \App\Models\EnterpriseInvestment::summaryLine($p->investments) : null,
@@ -227,10 +268,13 @@ new class extends Component
                 $eoiRow('Evidence available', $ls('investor_evidence', $eoi->investor_evidence)),
                 ...$profileOnly([
                     $proRow('Status of the deal', EnterpriseProfile::TRANSACTION_STATUSES[$p?->transaction_status ?? ''] ?? $p?->transaction_status),
+                    $money('Profile', 'Committed by the investor(s)', $fromLsl($investorLsl)),
                 ]),
             ],
             'transaction' => [
-                $eoiRow('Investment type(s)', $ls('investment_types', $eoi->investment_types)),
+                $eoiRow('Investment type(s)', $ls('investment_types', $eoi->investment_types),
+                    in_array('debt', $eoi->investment_types ?? [], true) ? 'Debt is not eligible for co-investment' : null,
+                    in_array('debt', $eoi->investment_types ?? [], true) ? 'bad' : null),
                 ...$profileOnly([
                     $proRow('Financing type', EnterpriseProfile::PARTICIPATION[$p?->participation ?? ''] ?? $p?->participation),
                     $proRow('Status of the deal', EnterpriseProfile::TRANSACTION_STATUSES[$p?->transaction_status ?? ''] ?? $p?->transaction_status),
@@ -241,10 +285,16 @@ new class extends Component
                 $money('EOI', 'Investor amount', $fromUsd($eoi->investor_amount_usd)),
                 ...$profileOnly([
                     $money('Profile', 'Current investment round', $fromLsl($p?->round_amount)),
-                    $money('Profile', 'Total project cost', $fromLsl($p?->project_cost)),
-                    $money('Profile', 'Investor tickets (total)', $fromLsl($p?->investor_contribution)),
-                    $money('Profile', 'Annual revenue (past year)', $fromLsl($p?->annual_revenue)),
+                    $money('Profile', 'Investor tickets (total)', $fromLsl($investorLsl)),
+                    $proRow('Investor minimum (US$ '.number_format(EnterpriseProfile::minInvestorUsd()).')',
+                        $investorLsl === null ? null : (EnterpriseProfile::meetsInvestorMinimum($investorLsl) ? 'Met' : 'Below the minimum'),
+                        'Minimum M '.number_format(EnterpriseProfile::minInvestorLsl()),
+                        $investorLsl === null ? null : (EnterpriseProfile::meetsInvestorMinimum($investorLsl) ? 'ok' : 'bad')),
                     $money('Profile', 'CAFI matching grant ('.EnterpriseProfile::grantRatioLabel().' of investor)', $fromLsl($p?->grant_requested)),
+                    $proRow('Total project cost', $fromLsl($p?->project_cost)[0],
+                        ($fromLsl($p?->project_cost)[1] ?? '').($p?->project_cost !== null && $grant && (float) $p->project_cost < $grant ? ' — less than the CAFI grant' : ''),
+                        $p?->project_cost !== null && $grant ? ((float) $p->project_cost < $grant ? 'bad' : 'ok') : null),
+                    $money('Profile', 'Annual revenue (past year)', $fromLsl($p?->annual_revenue)),
                 ]),
             ],
             'use_of_funds' => [
@@ -252,21 +302,42 @@ new class extends Component
                 $eoiRow('Description', $eoi->use_of_funds_description),
                 ...$profileOnly([
                     $proRow('What the money is for', $p?->investment_purpose),
+                    $proRow('Grant utilisation budget', $budgetSet
+                        ? collect($p->budgetRows())->filter(fn ($r) => (float) ($r['private'] ?? 0) + (float) ($r['grant'] ?? 0) > 0)
+                            ->map(fn ($r) => $r['category'].': investor M '.number_format((float) ($r['private'] ?? 0)).' · CAFI grant M '.number_format((float) ($r['grant'] ?? 0)))
+                            ->values()->all()
+                        : null,
+                        $budgetSet ? 'Total: investor M '.number_format($budget['private']).' · CAFI grant M '.number_format($budget['grant']) : null),
+                    $proRow('Budget matches the funding', $budgetSet
+                        ? collect([
+                            ['Investor column = investor amount (M '.number_format((float) $investorLsl).')', $investorLsl !== null && abs($budget['private'] - $investorLsl) < 1],
+                            ['CAFI grant column = matching grant (M '.number_format((float) $grant).')', $p->budgetMatchesGrant()],
+                        ])->all()
+                        : null),
                 ]),
             ],
             'alignment' => [
                 $eoiRow('Support needed', $l('support_need', $eoi->support_need)),
                 $eoiRow('Business description', $eoi->business_description),
                 ...$profileOnly([
-                    $proRow('Sector', $p?->sector),
-                    $proRow('Employees (current year)', $num($p?->employees), $p?->employeeBand() ? 'Number of employees: '.$p->employeeBand() : null),
+                    $proRow('Sector', $p?->sectorLabel(), $p?->sub_sector ? 'Sub-sector: '.$p->sub_sector : null),
+                    $proRow('Business model(s)', $p?->businessModelLabel()),
+                    $proRow('Products & services', $p?->products_services),
+                    $proRow('Customers', $p?->customers),
+                    $proRow('Current markets', $p?->labels(EnterpriseProfile::MARKETS, $p?->markets)),
+                    $proRow('Employees (current year)', $num($p?->employees),
+                        $p ? collect([
+                            'Full-time '.((int) $p->ft_male + (int) $p->ft_female).' ('.(int) $p->ft_female.' women)',
+                            'Part-time '.((int) $p->pt_male + (int) $p->pt_female).' ('.(int) $p->pt_female.' women)',
+                            'Youth '.((int) $p->youth_male + (int) $p->youth_female),
+                        ])->implode(' · ').($breakdown !== null && $p->employees !== null && (int) $p->employees !== $breakdown ? ' — breakdown adds up to '.$breakdown : '') : null,
+                        $breakdown !== null && $p?->employees !== null && (int) $p->employees !== $breakdown ? 'bad' : null),
                     $proRow('Employees (previous year)', $num($p?->employees_prev_year)),
-                    $proRow('Main business model', EnterpriseProfile::BUSINESS_MODELS[$p?->business_model ?? ''] ?? null),
+                    $proRow('Expected new jobs', $num($p?->expected_jobs),
+                        $p?->expected_jobs !== null ? 'Women '.(int) $p->expected_jobs_women.' · Youth '.(int) $p->expected_jobs_youth : null),
                     $proRow('Women / youth owned or managed', $p ? collect(['Women' => $p->women_owned_managed, 'Youth' => $p->youth_owned_managed])
                         ->map(fn ($v, $k) => $k.': '.($v === null ? '—' : ($v ? 'Yes' : 'No')))->implode(' · ') : null),
                     $proRow('Ownership', $p?->ownershipLine()),
-                    $proRow('Current markets', $p?->labels(EnterpriseProfile::MARKETS, $p?->markets)),
-                    $proRow('Products, customers & markets', $p?->customers),
                 ]),
             ],
             'exclusions' => [
@@ -274,10 +345,23 @@ new class extends Component
                     trim(($eoi->declaration_name ?: '').($eoi->declaration_date ? ' · '.$eoi->declaration_date->format('d M Y') : ''), ' ·') ?: null,
                     $eoi->declaration_agree ? 'ok' : 'bad'),
                 ...$profileOnly([
-                    $proRow('E&S checklist', $p && $p->es_checklist
-                        ? (($gaps = $p->esGaps()) ? collect($gaps)->map(fn ($k) => EnterpriseProfile::ES_CHECKLIST[$k][0])->all() : 'All requirements met')
-                        : null, $p?->es_checklist ? (count($p->esGaps()) ? count($p->esGaps()).' to address after award' : null) : null,
-                        $p?->es_checklist ? ($p->esGaps() ? 'bad' : 'ok') : null),
+                    $proRow('Directors & key management', $people($p?->keyPeopleRows() ?? [], ['position' => '%s', 'years' => '%s yrs', 'nationality' => '%s'])),
+                    $proRow('Ownership or management dispute', $yn($p?->ownership_dispute), $p?->ownership_dispute ? $p->ownership_dispute_details : null,
+                        $p?->ownership_dispute ? 'bad' : ($p?->ownership_dispute === false ? 'ok' : null)),
+                    $proRow('E&S screening', $p && $p->es_checklist
+                        ? ($esFlags
+                            ? collect($esFlags)->map(fn ($f) => ['disqualify' => 'DISQUALIFY', 'dd' => 'Due diligence', 'review' => 'Review', 'clarify' => 'Clarify'][$f[0]]
+                                .' · '.EnterpriseProfile::ES_CHECKLIST[$f[1]][0].' — '.$f[2]
+                                .(filled(((array) $p->es_notes)[$f[1]] ?? null) ? ' Applicant: “'.((array) $p->es_notes)[$f[1]].'”' : ''))->all()
+                            : 'No issue disclosed')
+                        : null,
+                        $p?->es_checklist
+                            ? ($p->esDisqualified() ? 'Immediate disqualification (exclusion list or work by someone under 18)'
+                                : ($esFlags ? count($esFlags).' answer(s) to follow up — a gap does not by itself disqualify' : 'Not the same as "ESG compliant" — confirm at due diligence'))
+                            : null,
+                        $p?->es_checklist ? ($p->esDisqualified() ? 'bad' : ($esFlags ? null : 'ok')) : null),
+                    $proRow('E&S records system', EnterpriseProfile::ES_RECORD_SYSTEMS[$p?->es_records_system ?? ''] ?? $p?->es_records_system),
+                    $proRow('E&S answers confirmed', $p ? ($p->es_confirmed ? 'Confirmed' : 'Not confirmed') : null, null, $p ? ($p->es_confirmed ? 'ok' : 'bad') : null),
                     $proRow('Profile declaration', $p?->declaration_agreed ? 'Signed' : 'Not signed',
                         $p?->declared_name ? $p->declared_name.($p->declared_on ? ' · '.$p->declared_on->format('d M Y') : '') : null,
                         $p?->declaration_agreed ? 'ok' : 'bad'),
@@ -288,13 +372,21 @@ new class extends Component
         // Which documents apply to this applicant, and which are required (depends on their registration answers)
         $required   = $p?->requiredDocumentTypes() ?? array_keys(array_filter(EnterpriseDocument::TYPES, fn ($t) => $t[3] === true));
         $applicable = fn (string $type) => isset(EnterpriseDocument::TYPES[$type])
-            && (is_bool(EnterpriseDocument::TYPES[$type][3]) || in_array($type, $required, true));
+            && (is_bool(EnterpriseDocument::TYPES[$type][3]) || in_array($type, $required, true) || in_array($type, EnterpriseDocument::PLAN_OR_DECK, true));
+
+        $planShown = collect(EnterpriseDocument::PLAN_OR_DECK)->first(fn ($t) => (bool) $p?->document($t)) ?? EnterpriseDocument::PLAN_OR_DECK[0];
 
         return collect($ev)->map(fn ($rows, $key) => [
             'rows' => $rows,
             'docs' => collect(self::CRITERIA_DOCS[$key] ?? [])
                 ->filter($applicable)
-                ->map(fn ($type) => [EnterpriseDocument::TYPES[$type][0], $p?->document($type), in_array($type, $required, true)])
+                // Business plan / pitch deck: one of the two is enough — show the uploaded one, or one "Business plan or pitch deck" pill
+                ->reject(fn ($type) => in_array($type, EnterpriseDocument::PLAN_OR_DECK, true) && $type !== $planShown)
+                ->map(fn ($type) => [
+                    $p?->document($type) ? EnterpriseDocument::TYPES[$type][0] : EnterpriseDocument::missingLabel($type),
+                    $p?->document($type),
+                    in_array($type, $required, true) || in_array($type, EnterpriseDocument::PLAN_OR_DECK, true),
+                ])
                 ->values()->all(),
         ])->all();
     }

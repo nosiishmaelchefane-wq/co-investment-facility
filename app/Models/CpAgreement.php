@@ -6,7 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Support\Facades\Storage;
 
-/** Gate 5 · Grant Agreement / Investment Agreement / other documentation (§3.6.3) */
+/** Gate 6 · Grant Agreement / Investment Agreement / other documentation (§3.7.3) */
 class CpAgreement extends Model
 {
     protected $fillable = [
@@ -20,6 +20,11 @@ class CpAgreement extends Model
 
     protected static function booted(): void
     {
-        static::deleting(fn (self $a) => $a->file_path && Storage::disk(ConditionReview::DISK)->delete($a->file_path));
+        // A plain closure: an arrow function would return false when there is no file, and returning false CANCELS the delete
+        static::deleting(function (self $a) {
+            if ($a->file_path) {
+                Storage::disk(ConditionReview::DISK)->delete($a->file_path);
+            }
+        });
     }
 }

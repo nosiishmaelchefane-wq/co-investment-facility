@@ -14,6 +14,7 @@ use App\Support\NotifyRecipients;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Locked;
 use Livewire\Attributes\On;
@@ -25,14 +26,19 @@ use Livewire\Component;
 |
 |   Who:
 |     Investment Committee role — gate3.score: declares conflicts and submits their Appendix F scorecard
-|                                gate3.decide: keeps the meeting record and records the Committee outcome
+|     Committee secretary       — ONE of the members, ticked in user management (gate3.decide, given directly):
+|                                 records for the whole Committee — review criteria, deliberation, questions log,
+|                                 material risks & conditions, and the Committee outcome and rationale
 |     Other staff (eoi.view-all): read-only.   Applicant: outcome and the conditions they own.
 |   Rules:
 |     Opens once Gate 2 = Proceed (EOI status "committee").
 |     Members = active users with the "committee" role (3 fixed members — config cif.committee.size).
-|     Scorecards stay hidden until every non-recused member has submitted; then they're consolidated.
+|     Information pack: built from the Gate 2 assessment, incl. the Investment Appraisal Memorandum (5 questions).
+|       Every member comments on each pack item (part of their scorecard).
+|     Scorecard (Appendix F): each criterion scored 1–5 (3+ = met) → total, % and the member's Approve / Reject.
+|     Scorecards and pack comments stay hidden until every non-recused member has submitted; then they're consolidated.
 |     The outcome can only be recorded once scoring is complete.
-|     Approve / Conditional → authorisation (Gate 4) · Defer → ic_deferred (PMU resubmits → new round) · Reject → not_progressed
+|     Approve / Conditional → grant_readiness (Gate 4 · Grant readiness) · Defer → ic_deferred (PMU resubmits → new round) · Reject → not_progressed
 |   Templates: resources/views/expression-of-interest/committee/partials/*
 |
 |   E-mails (sent after the change is saved; a failed e-mail never undoes it):
@@ -114,7 +120,7 @@ new class extends Component
     #[Computed]
     public function profile(): ?EnterpriseProfile
     {
-        return EnterpriseProfile::with('documents')->where('user_id', $this->eoi->user_id)->first();
+        return EnterpriseProfile::with('documents', 'investments')->where('user_id', $this->eoi->user_id)->first();
     }
 
     /**
@@ -135,12 +141,17 @@ new class extends Component
         $facts = [
             'Enterprise' => array_filter([
                 ['Registered name', $p?->registered_name ?: $eoi->business_name, $p ? 'Profile' : 'EOI'],
-                $p ? ['OBFC registration', $p->obfc_registered === null ? null : ($p->obfc_registered ? 'Registered'.($p->registration_no ? ' · '.$p->registration_no : '') : 'Not registered'), 'Profile'] : null,
+                $p ? ['OBFC registration', ($P::YES_NO_PROGRESS[$p->obfc_status ?? ''] ?? ($p->obfc_registered === null ? null : ($p->obfc_registered ? 'Yes' : 'No'))).($p->registration_no ? ' · '.$p->registration_no : ''), 'Profile'] : null,
                 $p ? ['Type of registration', $p->legal_form, 'Profile'] : null,
                 ['Location', $p ? collect([$p->city, $p->district])->filter()->implode(', ') : $eoi->district, $p ? 'Profile' : 'EOI'],
-                $p ? ['Sector · business model', collect([$p->sector, $P::BUSINESS_MODELS[$p->business_model ?? ''] ?? null])->filter()->implode(' · '), 'Profile'] : null,
-                $p ? ['Established · stage', collect([$p->year_established, $P::STAGES[$p->company_stage ?? ''] ?? null])->filter()->implode(' · '), 'Profile'] : null,
-                $p ? ['Employees', $p->employees !== null ? $p->employees.' current · '.($p->employees_prev_year ?? '—').' previous year' : null, 'Profile'] : null,
+                $p ? ['Sector', collect([$p->sectorLabel(), $p->sub_sector])->filter()->implode(' · '), 'Profile'] : null,
+                $p ? ['Business model(s)', $p->businessModelLabel(), 'Profile'] : null,
+                $p ? ['Operating since · stage', collect([$p->commencedLabel(), $P::STAGES[$p->company_stage ?? ''] ?? null])->filter()->implode(' · '), 'Profile'] : null,
+                $p ? ['Employees', $p->employees !== null ? $p->employees.' current · '.($p->employees_prev_year ?? '—').' previous year'.($p->expected_jobs ? ' · '.$p->expected_jobs.' new jobs expected' : '') : null, 'Profile'] : null,
+                $p ? ['Shareholders', collect($p->shareholderRows())->map(fn ($r) => $r['name'].(filled($r['percent'] ?? null) ? ' ('.$r['percent'].'%)' : ''))->implode('; ') ?: null, 'Profile'] : null,
+                $p ? ['Directors & key management', collect($p->keyPeopleRows())->map(fn ($r) => $r['name'].(filled($r['position'] ?? null) ? ' — '.$r['position'] : ''))->implode('; ') ?: null, 'Profile'] : null,
+                $p ? ['Products & services', $p->products_services, 'Profile'] : null,
+                $p ? ['Customers', $p->customers, 'Profile'] : null,
                 $p ? ['Women / youth owned or managed', 'Women: '.($yn($p->women_owned_managed) ?? '—').' · Youth: '.($yn($p->youth_owned_managed) ?? '—'), 'Profile'] : null,
                 $p ? ['Company summary', $p->activity, 'Profile'] : ['Business description', $eoi->business_description, 'EOI'],
                 $p ? ['Unique selling proposition', $p->usp, 'Profile'] : null,
@@ -148,14 +159,15 @@ new class extends Component
                 $p ? ['Competition', $p->competition, 'Profile'] : null,
             ]),
             'Investment' => array_filter([
-                $p ? ['Investors in the round', collect($p->investorRows())->map(fn ($r) => $r['name'].(filled($r['ticket'] ?? null) ? ' — M '.number_format((float) $r['ticket']) : ''))->implode('; ') ?: $eoi->investor_name, 'Profile'] : ['Investor', $eoi->investor_name, 'EOI'],
+                $p ? ['Investors in the round', collect($p->investorRows())->map(fn ($r) => $r['name'].(filled($r['id_number'] ?? null) ? ' (ID/Reg. '.$r['id_number'].')' : '').(filled($r['ticket'] ?? null) ? ' — M '.number_format((float) $r['ticket']) : ''))->implode('; ') ?: $eoi->investor_name, 'Profile'] : ['Investor', $eoi->investor_name, 'EOI'],
                 $p ? ['Financing type', $P::PARTICIPATION[$p->participation ?? ''] ?? null, 'Profile'] : null,
                 $p ? ['Current investment round', $lsl($p->round_amount), 'Profile'] : ['Investor amount', $usd($eoi->investor_amount_usd), 'EOI'],
                 $p ? ['CAFI matching grant ('.$P::grantRatioLabel().')', $lsl($p->grant_requested), 'Profile'] : null,
                 $p ? ['Investment history', \App\Models\EnterpriseInvestment::summaryLine($p->investments), 'Profile'] : null,
                 $p ? ['Investor track record (whole facility)', implode('; ', \App\Models\EnterpriseInvestment::trackRecordLines($p)) ?: null, 'Facility'] : null,
                 ['Total investment required', $usd($eoi->investment_required_usd), 'EOI'],
-                ['Planned use of the investment', $eoi->use_of_funds_description, 'EOI'],
+                ['Planned use of the investment', $p?->investment_purpose ?: $eoi->use_of_funds_description, $p?->investment_purpose ? 'Profile' : 'EOI'],
+                $p ? ['Total project cost', $lsl($p->project_cost), 'Profile'] : null,
                 $p ? ['Annual revenue (past year)', $lsl($p->annual_revenue), 'Profile'] : null,
             ]),
         ];
@@ -164,7 +176,15 @@ new class extends Component
         $docs = [];
         if ($p) {
             $required = $p->requiredDocumentTypes();
+            $planShown = collect(EnterpriseDocument::PLAN_OR_DECK)->first(fn ($t) => (bool) $p->document($t)) ?? EnterpriseDocument::PLAN_OR_DECK[0];
             foreach (EnterpriseDocument::TYPES as $type => [$label, , $section, $when]) {
+                if (in_array($type, EnterpriseDocument::PLAN_OR_DECK, true)) {
+                    if ($type !== $planShown) {
+                        continue;   // business plan OR pitch deck — show one
+                    }
+                    $docs[$P::SECTIONS[$section][0] ?? $section][] = [$p->document($type) ? $label : EnterpriseDocument::missingLabel($type), $p->document($type), true];
+                    continue;
+                }
                 if (! is_bool($when) && ! in_array($type, $required, true)) {
                     continue;   // registration document that doesn't apply to this applicant
                 }
@@ -176,6 +196,82 @@ new class extends Component
         }
 
         return ['facts' => $facts, 'docs' => $docs];
+    }
+
+    /**
+     * Committee information pack (§3.4.1), built from the Gate 2 assessment that went to the Committee.
+     *   key => ['present' => bool, 'status' => [label, pill] | null, 'lines' => [[label, text]], 'link' => url | null]
+     */
+    #[Computed]
+    public function pack(): array
+    {
+        $dd = $this->dd;
+        if (! $dd) {
+            return [];
+        }
+
+        $f    = $dd->toForm();
+        $v    = DueDiligence::validated($f);
+        $rate = max((float) config('cif.usd_to_lsl', 18.00), 0.0001);
+        $m    = fn ($x) => (float) $x > 0 ? 'M '.number_format((float) $x).' (US$ '.number_format((float) $x / $rate).')' : '—';
+        $memo = DueDiligence::memoRows($dd->memo);
+        $pdf  = route('due-diligence.memorandum', $dd);
+
+        $area = function (string $k) use ($f) {
+            $st = $f['areas'][$k]['status'] ?? null;
+
+            return [
+                'present' => true,
+                'status'  => [DueDiligence::STATUSES[$st][0] ?? 'Not assessed', ['complete' => 'pill-ok', 'clarification' => 'pill-warn'][$st] ?? 'pill-muted'],
+                'lines'   => [['Findings', trim((string) ($f['areas'][$k]['finding'] ?? '')) ?: 'No findings recorded.']],
+                'link'    => null,
+            ];
+        };
+
+        $expected = EnterpriseProfile::matchingGrant($v['private'] ?: null);
+
+        return [
+            'tss' => ['present' => true, 'status' => null, 'link' => null, 'lines' => array_values(array_filter([
+                ['Enterprise', $f['summary'] ?: ($this->eoi->business_name ?? '—')],
+                ['Investors', $f['investor_names'] ?: '—'],
+                ['Stage · structure', collect([DueDiligence::STAGES[$f['stage'] ?? ''][0] ?? null, $v['structure']])->filter()->implode(' · ') ?: '—'],
+                ['Expected outcomes', $f['expected_outcomes'] ?: '—'],
+                ['Key risks', $f['key_risks'] ?: '—'],
+            ]))],
+            'iam' => [
+                'present' => DueDiligence::memoComplete($dd->memo) || (bool) $dd->iam_path,
+                'status'  => DueDiligence::memoComplete($dd->memo) ? ['5 / 5 answered', 'pill-ok'] : ($dd->iam_path ? ['Uploaded document', 'pill-muted'] : ['Incomplete', 'pill-warn']),
+                'lines'   => collect(DueDiligence::MEMO_QUESTIONS)->map(fn ($q, $k) => [$q[0], trim($memo[$k]['text']) ?: 'Not answered.', $q[1]])->values()->all(),
+                'link'    => $pdf,
+            ],
+            'enterprise'  => $area('enterprise'),
+            'investor'    => $area('investor'),
+            'transaction' => $area('transaction'),
+            'financial'   => $area('financial'),
+            'esgc'        => array_merge($area('esgc'), ['status' => filled($f['esgc_category'] ?? null)
+                ? ['ESGC risk: '.DueDiligence::RATINGS[$f['esgc_category']], ['low' => 'pill-ok', 'medium' => 'pill-warn', 'high' => 'pill-danger'][$f['esgc_category']] ?? 'pill-muted']
+                : $area('esgc')['status']]),
+            'risk'        => $area('risk'),
+            'calculation' => ['present' => true, 'status' => null, 'link' => null, 'lines' => [
+                ['Private capital (validated)', $m($v['private'])],
+                ['CAFI grant', $m($v['grant']).($expected ? ' — maximum '.EnterpriseProfile::grantRatioLabel().' of private capital = '.$m($expected) : '')],
+                ['Total transaction', $m($v['total'])],
+            ]],
+            'conditions'  => ['present' => true, 'status' => [$dd->conditions->where('status', 'open')->count().' open', $dd->conditions->where('status', 'open')->count() ? 'pill-warn' : 'pill-ok'], 'link' => null,
+                'lines' => $dd->conditions->isEmpty()
+                    ? [['Conditions', 'None recorded.']]
+                    : $dd->conditions->map(fn ($c) => [
+                        (\App\Models\DueDiligenceCondition::STATUSES[$c->status][0] ?? $c->status).' · '.(\App\Models\DueDiligenceCondition::TREATMENTS[$c->treatment][0] ?? $c->treatment),
+                        $c->finding ?: '—',
+                    ])->values()->all()],
+        ];
+    }
+
+    /** The Committee secretary (records the Committee's decisions), or null if none has been set */
+    #[Computed]
+    public function secretary(): ?\App\Models\User
+    {
+        return \App\Models\User::committeeSecretary();
     }
 
     #[Computed]
@@ -332,7 +428,8 @@ new class extends Component
         $this->card = [
             'coi'                => $c?->coi,
             'coi_details'        => (string) $c?->coi_details,
-            'answers'            => collect(CommitteeScorecard::criteriaKeys())->mapWithKeys(fn ($k) => [$k => $c?->answers[$k] ?? null])->all(),
+            'scores'             => collect(CommitteeScorecard::criteriaKeys())->mapWithKeys(fn ($k) => [$k => $c?->scoreFor($k)])->all(),
+            'pack_comments'      => collect(CommitteeReview::PACK)->mapWithKeys(fn ($p, $k) => [$k => (string) ($c?->pack_comments[$k] ?? '')])->all(),
             'innovation'         => collect(CommitteeScorecard::INNOVATION)->mapWithKeys(fn ($l, $k) => [$k => in_array($k, $c?->innovation ?? [], true)])->all(),
             'comments'           => collect(CommitteeScorecard::GROUPS)->mapWithKeys(fn ($g, $k) => [$k => $c?->comments[$k] ?? ''])->all(),
             'use_of_funds_notes' => (string) $c?->use_of_funds_notes,
@@ -377,7 +474,9 @@ new class extends Component
         $card->fill([
             'coi'                => $this->card['coi'] ?: null,
             'coi_details'        => trim($this->card['coi_details']) ?: null,
-            'answers'            => array_filter($this->card['answers']),
+            'scores'             => $scores = collect($this->card['scores'])->filter(fn ($v) => is_numeric($v) && isset(CommitteeScorecard::SCALE[(int) $v]))->map(fn ($v) => (int) $v)->all(),
+            'answers'            => collect($scores)->map(fn ($v) => CommitteeScorecard::answerFor($v))->all(),
+            'pack_comments'      => collect($this->card['pack_comments'])->map(fn ($t) => trim((string) $t))->filter()->map(fn ($t) => Str::limit($t, 2000, ''))->all(),
             'innovation'         => array_keys(array_filter($this->card['innovation'])),
             'comments'           => array_filter($this->card['comments'], 'filled'),
             'use_of_funds_notes' => trim($this->card['use_of_funds_notes']) ?: null,
@@ -405,22 +504,37 @@ new class extends Component
         ];
         if (! $recused) {
             foreach (CommitteeScorecard::criteriaKeys() as $k) {
-                $rules["card.answers.$k"] = ['required', Rule::in(['met', 'not_met'])];
+                $rules["card.scores.$k"] = ['required', 'integer', Rule::in(array_keys(CommitteeScorecard::SCALE))];
+            }
+            if (CommitteeScorecard::PACK_COMMENTS_REQUIRED && $this->dd) {
+                foreach (array_keys(CommitteeReview::PACK) as $k) {
+                    $rules["card.pack_comments.$k"] = ['required', 'string', 'max:2000'];
+                }
             }
             $rules['card.recommendation'] = ['required', Rule::in(array_keys(CommitteeScorecard::RECOMMENDATIONS))];
             $rules['card.takeaways']      = ['required', 'string', 'max:3000'];
         }
 
-        $this->validate($rules, [
+        try {
+            $this->validate($rules, [
             'card.coi.required'            => 'Declare whether you have a conflict of interest.',
             'card.coi_details.required'    => 'Describe the conflict of interest.',
-            'card.answers.*.required'      => 'Mark this criterion as Met or Not met.',
+            'card.scores.*.required'        => 'Give this criterion a score from 1 to 5.',
+            'card.pack_comments.*.required' => 'Add your comment on this item of the information pack.',
             'card.recommendation.required' => 'Choose Approve or Reject.',
             'card.takeaways.required'      => 'Add your key take-aways and rationale.',
-        ]);
+            ]);
+        } catch (ValidationException $e) {
+            // Say what is missing — some fields (the pack comments) are further up the page
+            $this->dispatch('notify', type: 'error', message: 'Your scorecard is not complete: '.$this->missingSummary(array_keys($e->errors())).'.');
+            $this->dispatch('scorecard-invalid');
+            throw $e;
+        }
 
-        if (! $recused && ($this->card['answers']['innovative'] ?? null) === 'met' && ! array_filter($this->card['innovation'])) {
+        if (! $recused && (int) ($this->card['scores']['innovative'] ?? 0) >= CommitteeScorecard::MET_FROM && ! array_filter($this->card['innovation'])) {
             $this->addError('card.innovation', 'Tick at least one type of innovation.');
+            $this->dispatch('notify', type: 'error', message: 'Your scorecard is not complete: tick at least one type of innovation.');
+            $this->dispatch('scorecard-invalid');
             return;
         }
 
@@ -440,6 +554,22 @@ new class extends Component
             );
             $this->dispatch('notify', type: 'info', message: 'All scorecards are in — the consolidated scorecard is now visible. '.$note);
         }
+    }
+
+    /** "3 information pack comments, 2 scores, your recommendation" — from the failed field names */
+    public function missingSummary(array $fields): string
+    {
+        $count = fn (string $prefix) => count(array_filter($fields, fn ($f) => str_starts_with($f, $prefix)));
+        $plural = fn (int $n, string $one, string $many) => $n.' '.($n === 1 ? $one : $many);
+
+        return collect([
+            in_array('card.coi', $fields, true) ? 'the conflict-of-interest declaration' : null,
+            in_array('card.coi_details', $fields, true) ? 'details of the conflict of interest' : null,
+            ($n = $count('card.pack_comments.')) ? $plural($n, 'information pack comment (see the pack above)', 'information pack comments (see the pack above)') : null,
+            ($n = $count('card.scores.')) ? $plural($n, 'score', 'scores') : null,
+            in_array('card.recommendation', $fields, true) ? 'your overall recommendation' : null,
+            in_array('card.takeaways', $fields, true) ? 'your key take-aways' : null,
+        ])->filter()->implode(', ') ?: 'please check the highlighted fields';
     }
 
     /* =====================================================================
@@ -610,8 +740,12 @@ new class extends Component
         }
 
         // PMU (next step is theirs: Gate 4, resubmission or closing) + the Committee members
-        $staff = NotifyRecipients::pmu()->merge(NotifyRecipients::committee())->unique('id')->values();
-        $notes[] = NotifyRecipients::send($staff, new EoiCommitteeDecisionRecorded($eoi, $review), 'the PMU and Committee', except: auth()->id());
+        // Approved → Grants Management starts the Gate 4 grant readiness review
+        $staff = NotifyRecipients::pmu()->merge(NotifyRecipients::committee())
+            ->when($review->isApproved(), fn ($c) => $c->merge(NotifyRecipients::withPermission('readiness.review')))
+            ->unique('id')->values();
+        $notes[] = NotifyRecipients::send($staff, new EoiCommitteeDecisionRecorded($eoi, $review),
+            $review->isApproved() ? 'the PMU, Committee and Grants Management' : 'the PMU and Committee', except: auth()->id());
 
         return implode(' ', array_filter($notes));
     }
@@ -630,7 +764,7 @@ new class extends Component
             'expression_of_interest_id' => $this->eoiId,
             'due_diligence_id'          => $this->dd?->id,
             'round'                     => $this->round,
-            'secretary_id'              => auth()->user()->can('gate3.decide') ? auth()->id() : null,
+            'secretary_id'              => $this->secretary?->id ?? (auth()->user()->can('gate3.decide') ? auth()->id() : null),
         ]));
 
         $this->reviewId = $review->id;
@@ -712,7 +846,7 @@ new class extends Component
         ['TSS + Investment Appraisal Memorandum', $dd ? 'done' : 'todo'],
         ['Investment Committee review', $decided ? 'done' : 'current'],
         ['Approve / Conditional / Defer / Reject', $decided ? 'done' : 'todo'],
-        ['Gate 4', $review?->isApproved() ? 'current' : 'todo'],
+        ['Gate 4 · Grant readiness', $review?->isApproved() ? 'current' : 'todo'],
     ];
 @endphp
 
@@ -776,6 +910,20 @@ new class extends Component
             <div class="small text-muted mb-3"><i class="bi bi-eye me-1"></i> Read-only — Gate 3 is carried out by the Investment Committee.</div>
         @endif
 
+        @if (! $decided && ! $this->secretary)
+            <div class="callout callout-warning small mb-3">
+                <i class="bi bi-exclamation-triangle me-1"></i>
+                No <strong>Committee secretary</strong> has been set, so nobody can record the Committee's decisions.
+                In user management, open one of the Committee members and tick <em>Committee secretary</em>.
+            </div>
+        @elseif (! $decided && $isMember && ! $canRecord)
+            <div class="callout small mb-3">
+                <i class="bi bi-journal-check me-1"></i>
+                <strong>{{ $this->secretary->name }}</strong> (Committee secretary) records the Committee's decisions —
+                review criteria, deliberation, questions, conditions and the outcome. Your part is your conflict declaration, pack comments and scorecard.
+            </div>
+        @endif
+
         @if ($review?->resubmission_note)
             <div class="callout small mb-3">
                 <div class="fw-semibold mb-1"><i class="bi bi-arrow-repeat me-1"></i> Resubmitted after deferral</div>
@@ -790,7 +938,10 @@ new class extends Component
             </div>
             <div class="col-md-6">
                 <dt class="detail-label">Committee secretary</dt>
-                <dd class="mb-0 text-navy">{{ $review?->secretary?->name ?? ($canRecord ? auth()->user()->name : '—') }}</dd>
+                <dd class="mb-0 text-navy">
+                    {{ $decided ? ($review->secretary?->name ?? $this->secretary?->name ?? '—') : ($this->secretary?->name ?? 'Not set') }}
+                    @if (! $decided && $this->secretary?->id === auth()->id()) <span class="pill pill-muted ms-1">You</span> @endif
+                </dd>
             </div>
             <div class="col-md-3">
                 <label class="detail-label" for="ic_ref">Meeting ref.</label>

@@ -1,0 +1,1 @@
+<div class="col-lg-5"><div class="card card-modern h-100"><div class="card-body placeholder-glow"><span class="placeholder col-6 mb-3"></span><span class="placeholder col-12" style="height: 260px"></span></div></div></div>

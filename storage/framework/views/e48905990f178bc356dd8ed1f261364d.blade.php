@@ -1,0 +1,1 @@
+<div class="card card-modern mb-4"><div class="card-body placeholder-glow"><span class="placeholder col-4 mb-3"></span><span class="placeholder col-12 mb-2"></span><span class="placeholder col-12 mb-2"></span><span class="placeholder col-12"></span></div></div>

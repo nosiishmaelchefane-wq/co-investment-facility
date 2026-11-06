@@ -1,23 +1,25 @@
 {{--
-    G4 · signing outside the system for one authority (no e-mail is sent). Included from ⚡authorise-application (no $this here).
-    Vars: $role ('md'|'ps'), $a (?Authorisation), $can (bool), $signing (array), $decidedRole (bool)
+    G5 · signing the Grant Agreement outside the system for one authority (no e-mail is sent). Included from ⚡authorise-application (no $this here).
+    Vars: $role ('md'|'ps'), $a (?Authorisation), $can (bool), $signing (array), $decidedRole (bool),
+          $defaultDoc (?[disk, path, name]) — sent when nothing is attached: Gate 4 Draft Grant Agreement (MD) / MD-signed agreement (PS)
 --}}
 @php
-    $A        = \App\Models\Authorisation::class;
-    $title    = $A::AUTHORITIES[$role][1];
-    $sent     = (bool) $a?->sentForSigning($role);
-    $signed   = (bool) $a?->hasSignedCopy($role);
-    $reqPath  = $a?->{"{$role}_request_path"};
-    $s        = $signing[$role] ?? [];
+    $A          = \App\Models\Authorisation::class;
+    $title      = $A::AUTHORITIES[$role][1];
+    $sent       = (bool) $a?->sentForSigning($role);
+    $signed     = (bool) $a?->hasSignedCopy($role);
+    $reqPath    = $a?->{"{$role}_request_path"};
+    $s          = $signing[$role] ?? [];
+    $defaultDoc = $defaultDoc ?? null;
 @endphp
 
 <div class="border rounded-3 p-3 mb-3 bg-light">
     <div class="row g-3">
-        {{-- ============ Step 1 · send for signature ============ --}}
+        {{-- ============ Step 1 · send the Grant Agreement for signature ============ --}}
         <div class="col-lg-7">
             <div class="d-flex align-items-center gap-2 mb-2">
                 <span class="pill {{ $sent ? 'pill-ok' : ($signed ? 'pill-muted' : 'pill-warn') }}"><i class="bi {{ $sent ? 'bi-envelope-check' : 'bi-envelope' }}"></i> 1</span>
-                <span class="fw-semibold text-navy small">Attach the document and send it to the {{ $title }} for signing</span>
+                <span class="fw-semibold text-navy small">Send the Grant Agreement to the {{ $title }} for signature</span>
             </div>
 
             @if ($sent)
@@ -45,14 +47,18 @@
                         @error('signing.'.$role.'.email') <div class="invalid-feedback">{{ $message }}</div> @enderror
                     </div>
                     <div class="col-12">
-                        <label class="form-label small fw-semibold mb-1">Document to be signed @unless ($reqPath) <span class="req">*</span> @endunless</label>
+                        <label class="form-label small fw-semibold mb-1">Grant Agreement to be signed @unless ($reqPath || $defaultDoc) <span class="req">*</span> @endunless</label>
                         <input type="file" class="form-control form-control-sm @error('requestFile.'.$role) is-invalid @enderror" wire:model="requestFile.{{ $role }}" accept=".pdf,.docx,.doc">
-                        <div class="form-text">The authorisation form / memo for signature (PDF or Word). @if ($reqPath) Leave empty to keep the current document. @endif</div>
+                        <div class="form-text">
+                            @if ($reqPath) Leave empty to keep the current document.
+                            @elseif ($defaultDoc) Leave empty to send <strong>{{ $defaultDoc[2] }}</strong> {{ $role === 'md' ? '(the Draft Grant Agreement from Gate 4)' : '(the agreement the Managing Director signed)' }}.
+                            @else The Grant Agreement for signature (PDF or Word). @endif
+                        </div>
                         @error('requestFile.'.$role) <div class="invalid-feedback">{{ $message }}</div> @enderror
                     </div>
                     <div class="col-12">
                         <label class="form-label small fw-semibold mb-1">Note (optional)</label>
-                        <textarea rows="2" class="form-control form-control-sm" wire:model="signing.{{ $role }}.message" placeholder="e.g. hand-delivered to the {{ $title }}'s office, follow up on Friday"></textarea>
+                        <textarea rows="2" class="form-control form-control-sm" wire:model="signing.{{ $role }}.message" placeholder="e.g. hand-delivered to the {{ $title }}'s office with the Grant Readiness Memo, follow up on Friday"></textarea>
                     </div>
                     <div class="col-12 d-flex">
                         <button type="button" class="btn btn-sm {{ $sent ? 'btn-outline-secondary' : 'btn-brand' }} ms-auto" wire:click="markSent('{{ $role }}')"
@@ -65,11 +71,11 @@
             @endif
         </div>
 
-        {{-- ============ Step 2 · signed copy ============ --}}
+        {{-- ============ Step 2 · signed Grant Agreement ============ --}}
         <div class="col-lg-5">
             <div class="d-flex align-items-center gap-2 mb-2">
                 <span class="pill {{ $signed ? 'pill-ok' : 'pill-warn' }}"><i class="bi {{ $signed ? 'bi-file-earmark-check' : 'bi-hourglass-split' }}"></i> 2</span>
-                <span class="fw-semibold text-navy small">Upload the signed copy</span>
+                <span class="fw-semibold text-navy small">Upload the signed Grant Agreement</span>
             </div>
 
             @if ($signed)
@@ -88,7 +94,10 @@
                 <span wire:loading wire:target="signedFile.{{ $role }}" class="small text-muted"><span class="spinner-border spinner-border-sm me-1"></span> Uploading…</span>
                 <div wire:loading.remove wire:target="signedFile.{{ $role }}">
                     <input type="file" class="form-control form-control-sm @error('signedFile.'.$role) is-invalid @enderror" wire:model="signedFile.{{ $role }}" accept=".pdf,.jpg,.jpeg,.png">
-                    <div class="form-text">When the signed document comes back — PDF, or a clear scan / photo.</div>
+                    <div class="form-text">
+                        When the signed agreement comes back — PDF, or a clear scan / photo.
+                        @if ($role === 'ps') This is the fully executed Grant Agreement (both signatures). @endif
+                    </div>
                     @error('signedFile.'.$role) <div class="invalid-feedback">{{ $message }}</div> @enderror
                 </div>
             @else

@@ -30,13 +30,16 @@ class ExpressionOfInterest extends Model
 
     /* ---------- Gate 3 ---------- */
     public const STATUS_IC_DEFERRED    = 'ic_deferred';     // Committee deferred — PMU to act and resubmit
-    public const STATUS_AUTHORISATION  = 'authorisation';   // Committee approved → final authorisation (Gate 4)
+    public const STATUS_GRANT_READINESS = 'grant_readiness'; // Committee approved → Gate 4 grant readiness review
 
-    /* ---------- Gate 4 ---------- */
-    public const STATUS_AUTH_HOLD      = 'authorisation_hold';  // MD returned / PS asked for clarification — resolve and resubmit
-    public const STATUS_AUTHORISED     = 'authorised';          // Both approvals in → Gate 5 (conditions precedent & Grant Agreement)
+    /* ---------- Gate 4 · Grant readiness ---------- */
+    public const STATUS_AUTHORISATION  = 'authorisation';   // PMU Director approved → Gate 5 final authorisation
 
-    /* ---------- Gate 5 ---------- */
+    /* ---------- Gate 5 · Final authorisation ---------- */
+    public const STATUS_AUTH_HOLD      = 'authorisation_hold';  // MD / PS returned for clarification — resolve and resubmit
+    public const STATUS_AUTHORISED     = 'authorised';          // Both signatures in → Gate 6 (conditions precedent & onboarding)
+
+    /* ---------- Gate 6 · Conditions precedent ---------- */
     public const STATUS_CAPITAL_PENDING = 'capital_pending';    // conditions met, investor capital not yet verified — no CAFI disbursement
     public const STATUS_CLEARED         = 'cleared';            // cleared for disbursement → tranches released by Finance
     public const STATUS_ESCALATED       = 'escalated';          // a material condition can't be met — escalation / review
@@ -44,20 +47,26 @@ class ExpressionOfInterest extends Model
     /** Statuses at which Gate 1 has been passed */
     public const PAST_GATE1 = [
         self::STATUS_INVITED, self::STATUS_DUE_DILIGENCE, self::STATUS_DD_HOLD, self::STATUS_COMMITTEE,
-        self::STATUS_IC_DEFERRED, self::STATUS_AUTHORISATION, self::STATUS_AUTH_HOLD, self::STATUS_AUTHORISED,
+        self::STATUS_IC_DEFERRED, self::STATUS_GRANT_READINESS, self::STATUS_AUTHORISATION, self::STATUS_AUTH_HOLD, self::STATUS_AUTHORISED,
         self::STATUS_CAPITAL_PENDING, self::STATUS_CLEARED, self::STATUS_ESCALATED,
     ];
 
     /** Statuses an Investment Committee member can see (plus anything the Committee has reviewed) */
-    public const COMMITTEE_VISIBLE = [self::STATUS_COMMITTEE, self::STATUS_IC_DEFERRED, self::STATUS_AUTHORISATION, self::STATUS_AUTH_HOLD, self::STATUS_AUTHORISED];
+    public const COMMITTEE_VISIBLE = [self::STATUS_COMMITTEE, self::STATUS_IC_DEFERRED, self::STATUS_GRANT_READINESS, self::STATUS_AUTHORISATION, self::STATUS_AUTH_HOLD, self::STATUS_AUTHORISED];
 
-    /** Statuses at which Gate 4 has been reached */
+    /** Statuses at which Gate 4 (grant readiness) has been reached */
+    public const READINESS_VISIBLE = [
+        self::STATUS_GRANT_READINESS, self::STATUS_AUTHORISATION, self::STATUS_AUTH_HOLD, self::STATUS_AUTHORISED,
+        self::STATUS_CAPITAL_PENDING, self::STATUS_CLEARED, self::STATUS_ESCALATED,
+    ];
+
+    /** Statuses at which Gate 5 (final authorisation) has been reached */
     public const AUTHORISATION_VISIBLE = [
         self::STATUS_AUTHORISATION, self::STATUS_AUTH_HOLD, self::STATUS_AUTHORISED,
         self::STATUS_CAPITAL_PENDING, self::STATUS_CLEARED, self::STATUS_ESCALATED,
     ];
 
-    /** Statuses at which Gate 5 is open (Finance can see these to release tranches) */
+    /** Statuses at which Gate 6 (conditions precedent) is open — Finance can see these to release tranches. Name kept for compatibility. */
     public const GATE5_VISIBLE = [self::STATUS_AUTHORISED, self::STATUS_CAPITAL_PENDING, self::STATUS_CLEARED, self::STATUS_ESCALATED];
 
     /** Applicant may edit / resubmit */
@@ -133,13 +142,19 @@ class ExpressionOfInterest extends Model
         return $this->hasMany(CommitteeReview::class);
     }
 
-    /** Gate 5 conditions precedent, agreements & onboarding */
+    /** Gate 6 conditions precedent, agreements & onboarding */
     public function conditionReview(): \Illuminate\Database\Eloquent\Relations\HasOne
     {
         return $this->hasOne(ConditionReview::class);
     }
 
-    /** Gate 4 final authorisation rounds */
+    /** Gate 4 grant readiness rounds */
+    public function grantReadinesses(): HasMany
+    {
+        return $this->hasMany(GrantReadiness::class);
+    }
+
+    /** Gate 5 final authorisation rounds */
     public function authorisations(): HasMany
     {
         return $this->hasMany(Authorisation::class);

@@ -23,6 +23,9 @@ return [
     'co_investment' => [
         'grant_ratio'      => (float) env('CIF_GRANT_RATIO', 0.5),
         'min_investor_usd' => (float) env('CIF_MIN_INVESTOR_USD', 50000),
+        // Gate 4 · Grant readiness: total CAFI grants one enterprise may receive, and the share to be spent in Lesotho
+        'cumulative_cap_usd' => (float) env('CIF_CUMULATIVE_GRANT_CAP_USD', 350000),
+        'min_lesotho_pct'    => (float) env('CIF_MIN_LESOTHO_PCT', 70),
     ],
 
     /*

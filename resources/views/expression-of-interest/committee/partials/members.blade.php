@@ -30,7 +30,10 @@
                         <div class="d-flex align-items-center gap-2 mb-2">
                             <span class="avatar-sm">{{ $ini }}</span>
                             <div class="me-auto overflow-hidden">
-                                <div class="fw-semibold text-navy text-truncate">{{ $member->name }} @if ($mine) <span class="pill pill-muted">You</span> @endif</div>
+                                <div class="fw-semibold text-navy text-truncate">
+                                    {{ $member->name }} @if ($mine) <span class="pill pill-muted">You</span> @endif
+                                    @if ($this->secretary?->id === $member->id) <span class="pill pill-ok" title="Records the Committee's decisions"><i class="bi bi-journal-check"></i> Secretary</span> @endif
+                                </div>
                                 <div class="small text-muted text-truncate">{{ $member->email }}</div>
                             </div>
                         </div>
@@ -53,6 +56,7 @@
                             @elseif ($c?->isSubmitted())
                                 <span class="pill pill-ok"><i class="bi bi-check-lg"></i> Submitted {{ $c->submitted_at->format('d M') }}</span>
                                 @if ($revealed || $mine)
+                                    <span class="pill {{ $c->scorePct() >= $SC::passPct() ? 'pill-ok' : 'pill-warn' }}" title="Total score">{{ $c->totalScore() }} / {{ $SC::maxScore() }} · {{ $c->scorePct() }}%</span>
                                     <span class="pill {{ $c->recommendation === 'approve' ? 'pill-ok' : 'pill-danger' }}">
                                         <i class="bi {{ $c->recommendation === 'approve' ? 'bi-hand-thumbs-up' : 'bi-hand-thumbs-down' }}"></i> {{ $SC::RECOMMENDATIONS[$c->recommendation] ?? '' }}
                                     </span>

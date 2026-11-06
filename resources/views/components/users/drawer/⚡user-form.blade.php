@@ -33,10 +33,20 @@ new class extends Component
         $this->form = $this->blankForm();
     }
 
+    /** Only a Super Administrator can give out the Super Administrator role. */
     #[Computed]
     public function roles()
     {
-        return Role::orderBy('id')->get();
+        return Role::orderBy('id')
+            ->when(! auth()->user()->hasRole(Role::SUPER_ADMIN), fn ($q) => $q->where('name', '!=', Role::SUPER_ADMIN))
+            ->get();
+    }
+
+    /** The current Committee secretary (to show who would be replaced) */
+    #[Computed]
+    public function currentSecretary(): ?User
+    {
+        return User::committeeSecretary();
     }
 
     /* ---------------- Listeners ---------------- */
@@ -65,9 +75,10 @@ new class extends Component
             'name'         => $user->name,
             'email'        => $user->email,
             'phone'        => $user->phone ?? '',
-            'role'         => $user->roles->first()?->name ?? '',
+            'role'         => $user->roles->firstWhere('name', '!=', Role::SUPER_ADMIN)?->name ?? '',
             'organisation' => $user->organisation_name ?? '',
             'status'       => $user->isActive() ? 'active' : 'inactive',
+            'committee_secretary' => $user->isCommitteeSecretary(),
         ]);
         $this->showDrawer = true;
     }
@@ -91,7 +102,7 @@ new class extends Component
         // ---- Safety checks ------------------------------------------------
         if ($existing && $this->isSelf) {
             // Your own role and status can't be changed here (prevents locking yourself out)
-            $this->form['role']   = $existing->roles->first()?->name ?? $this->form['role'];
+            $this->form['role']   = $existing->roles->firstWhere('name', '!=', Role::SUPER_ADMIN)?->name ?? $this->form['role'];
             $this->form['status'] = 'active';
         }
 
@@ -139,7 +150,19 @@ new class extends Component
                 ]);
             }
 
-            $user->syncRoles([$this->form['role']]);
+            // One CIF role per user; a Super Administrator keeps that flag on top
+            $keepSuper = $existing?->hasRole(Role::SUPER_ADMIN) ?? false;
+            $user->syncRoles(array_values(array_unique(array_filter([
+                $this->form['role'],
+                $keepSuper ? Role::SUPER_ADMIN : null,
+            ]))));
+
+            // Committee secretary: one Committee member records the Committee's decisions (replaces any previous one)
+            if ($this->form['role'] === 'committee' && $this->form['committee_secretary']) {
+                $user->makeCommitteeSecretary();
+            } else {
+                $user->removeCommitteeSecretary();
+            }
 
             return $user;
         });
@@ -174,11 +197,12 @@ new class extends Component
             'form.name'         => ['required', 'string', 'max:255'],
             'form.email'        => ['required', 'email', 'max:255', Rule::unique('users', 'email')->ignore($this->userId)],
             'form.phone'        => ['nullable', 'string', 'max:30', Rule::unique('users', 'phone')->ignore($this->userId)],
-            'form.role'         => ['required', Rule::exists(config('permission.table_names.roles'), 'name')],
+            'form.role'         => ['required', Rule::in($this->roles->pluck('name')->all())],
             'form.organisation' => [$this->form['role'] === 'enterprise' ? 'required' : 'nullable', 'string', 'max:255'],
             'form.access'       => ['required', 'in:invite,password'],
             'form.status'       => ['required', 'in:active,inactive'],
             'form.password'     => $isNewWithPassword ? ['required', 'confirmed', Password::defaults()] : ['nullable'],
+            'form.committee_secretary' => ['boolean'],
         ];
     }
 
@@ -216,6 +240,7 @@ new class extends Component
             'password'              => '',
             'password_confirmation' => '',
             'status'                => 'active',     // active | inactive
+            'committee_secretary'   => false,        // Investment Committee only
         ];
     }
 
@@ -329,10 +354,39 @@ new class extends Component
                 </div>
 
                 @if ($form['role'] === 'committee')
+                    @php
+                        $sec       = $this->currentSecretary;
+                        $isCurrent = $sec && $userId && $sec->id === $userId;
+                    @endphp
                     <div class="callout small mt-3">
                         <i class="bi bi-info-circle me-1"></i>
-                        The Investment Committee has <strong>3 fixed members</strong>. Members declare conflicts of interest per transaction at Gate 3.
+                        The Investment Committee has <strong>3 fixed members</strong>. Members declare conflicts of interest and score each transaction at Gate 3.
                     </div>
+
+                    <label class="choice choice--card mt-3">
+                        <input type="checkbox" wire:model.live="form.committee_secretary">
+                        <span class="choice-box">
+                            <span class="choice-icon"><i class="bi bi-journal-check"></i></span>
+                            <span>
+                                <span class="d-block fw-semibold">Committee secretary</span>
+                                <span class="d-block small text-muted lh-sm mt-1">
+                                    Records the Committee's decisions for all members: review criteria, deliberation, questions log,
+                                    material risks &amp; conditions, and the Committee outcome and rationale. The secretary also scores as a member.
+                                </span>
+                            </span>
+                        </span>
+                    </label>
+                    @if ($form['committee_secretary'] && $sec && ! $isCurrent)
+                        <div class="small text-warning mt-1">
+                            <i class="bi bi-arrow-left-right me-1"></i> {{ $sec->name }} is the secretary now — saving makes this user the secretary instead.
+                        </div>
+                    @elseif (! $form['committee_secretary'] && $isCurrent)
+                        <div class="small text-warning mt-1">
+                            <i class="bi bi-exclamation-triangle me-1"></i> Unticking leaves the Committee without a secretary — nobody will be able to record decisions until another member is ticked.
+                        </div>
+                    @elseif (! $sec)
+                        <div class="small text-muted mt-1"><i class="bi bi-info-circle me-1"></i> No Committee secretary has been set yet.</div>
+                    @endif
                 @endif
 
                 {{-- 3. Sign-in (new users only) --}}

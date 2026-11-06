@@ -6,7 +6,7 @@ use App\Models\ConditionReview;
 use Illuminate\Notifications\Messages\MailMessage;
 
 /**
- * G5 · Onboarding — the summary of obligations sent to the enterprise (§3.6.5):
+ * G6 · Step 4 onboarding record — the summary of obligations sent to the enterprise (§3.7.4):
  *   contact person, reporting frequency, first report, the arrangements agreed, outstanding conditions and the tranche schedule.
  */
 class ObligationsSummary extends Gate5Mail
@@ -32,6 +32,21 @@ class ObligationsSummary extends Gate5Mail
             }
         }
 
+        $base = (array) ($r->baseline ?? []);
+        $baseRows = collect(ConditionReview::BASELINE_FIELDS)->filter(fn ($l, $k) => ($base[$k] ?? null) !== null && $base[$k] !== '');
+        if ($baseRows->isNotEmpty()) {
+            $mail->line('**Baseline recorded'.(! empty($base['as_of']) ? ' (as at '.\Illuminate\Support\Carbon::parse($base['as_of'])->format('d M Y').')' : '').':** '
+                .$baseRows->map(fn ($l, $k) => $l.': '.(str_contains($k, 'revenue') ? 'M '.number_format((float) $base[$k]) : $base[$k]))->implode(' · '));
+        }
+
+        $ongoing = $r->conditions()->where('timing', 'ongoing')->orderBy('position')->get();
+        if ($ongoing->isNotEmpty()) {
+            $mail->line('**Continuing obligations:**');
+            foreach ($ongoing as $c) {
+                $mail->line('- '.$c->finding);
+            }
+        }
+
         $tranches = $r->tranches()->orderBy('position')->get();
         if ($tranches->isNotEmpty()) {
             $mail->line('**Disbursement schedule:**');
@@ -44,7 +59,7 @@ class ObligationsSummary extends Gate5Mail
             }
         }
 
-        $open = $r->conditions()->where('status', 'outstanding')->orderBy('position')->get();
+        $open = $r->conditions()->where('status', 'outstanding')->where('timing', '!=', 'ongoing')->orderBy('position')->get();
         if ($open->isNotEmpty()) {
             $mail->line('**Conditions still outstanding:**');
             foreach ($open as $i => $c) {

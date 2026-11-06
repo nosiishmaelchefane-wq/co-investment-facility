@@ -7,14 +7,20 @@ use App\Models\ConditionReview;
 use App\Models\CpAgreement;
 use App\Models\CpCondition;
 use App\Models\DisbursementTranche;
+use App\Models\EnterpriseProfile;
+use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
+use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 /**
- * Private downloads for Gate 5 files: condition evidence, signed agreements, investor capital evidence,
+ * Private downloads for Gate 6 files: condition evidence, signed agreements, investor capital evidence,
  *   tranche proof of payment.
  *   Route: GET /gate5/{kind}/{id}/download  → name "gate5.file"   (kind: condition | agreement | deployment | tranche)
- *   Allowed: anyone who can view the transaction (applicant, staff with eoi.view-all, Finance at Gate 5).
+ *   Record: GET /gate5/{review}/record → name "gate5.record" — Gate 6/7 disbursement file (PDF): CP checklist, verification
+ *   record, readiness confirmation, disbursement record, onboarding record. Staff only.
+ *   Allowed: anyone who can view the transaction (applicant, staff with eoi.view-all, Finance at Gate 6).
  */
 class Gate5FileController extends Controller
 {
@@ -33,5 +39,23 @@ class Gate5FileController extends Controller
         abort_unless($model->{$pathCol} && Storage::disk(ConditionReview::DISK)->exists($model->{$pathCol}), 404);
 
         return Storage::disk(ConditionReview::DISK)->download($model->{$pathCol}, $model->{$nameCol});
+    }
+
+    public function record(ConditionReview $review): Response
+    {
+        $review->loadMissing(['expressionOfInterest.user', 'conditions.verifiedBy:id,name', 'agreements', 'deployments.verifier:id,name', 'deployments.tranche',
+            'tranches.requester:id,name', 'tranches.approver:id,name', 'tranches.releaser:id,name', 'decider:id,name',
+            'readinessPmu:id,name', 'readinessFinance:id,name', 'authorisation']);
+        $eoi = $review->expressionOfInterest;
+        abort_unless($eoi && $eoi->isViewableBy(auth()->user()) && $eoi->user_id !== auth()->id(), 403);
+
+        $pdf = Pdf::loadView('pdf.disbursement-file', [
+            'r'       => $review,
+            'eoi'     => $eoi,
+            'profile' => EnterpriseProfile::where('user_id', $eoi->user_id)->first(),
+            'rate'    => max((float) config('cif.usd_to_lsl', 18.00), 0.0001),
+        ])->setPaper('a4');
+
+        return $pdf->download('Disbursement File - '.Str::slug($eoi->reference.' '.($eoi->business_name ?? '')).'.pdf');
     }
 }

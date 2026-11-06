@@ -17,7 +17,7 @@ class EnterpriseInvestment extends Model
 {
     public const DISK = 'local';
 
-    public const MAX_KB = 20480;
+    public const MAX_KB = 3072;   // 3 MB, same as profile attachments
 
     public const PROOF_MIMES = 'pdf,jpg,jpeg,png,docx,doc,xlsx,xls';
 
@@ -44,7 +44,7 @@ class EnterpriseInvestment extends Model
     public const SOURCES = ['enterprise' => 'Declared by the enterprise', 'reviewer' => 'Recorded by a reviewer'];
 
     protected $fillable = [
-        'enterprise_profile_id', 'investor_name', 'investor_type', 'investor_country', 'amount', 'invested_on',
+        'enterprise_profile_id', 'investor_name', 'investor_id_number', 'investor_type', 'investor_country', 'amount', 'invested_on',
         'instrument', 'round_label', 'notes', 'proof_path', 'proof_name', 'proof_size', 'source', 'recorded_by',
         'status', 'review_note', 'reviewed_by', 'reviewed_at',
     ];
@@ -58,6 +58,8 @@ class EnterpriseInvestment extends Model
 
     protected static function booted(): void
     {
+        static::saved(fn () => self::forgetIdMap());
+
         static::deleting(function (EnterpriseInvestment $i) {
             if ($i->proof_path) {
                 Storage::disk(self::DISK)->delete($i->proof_path);
@@ -104,15 +106,79 @@ class EnterpriseInvestment extends Model
         return $this->proof_size >= 1048576 ? round($this->proof_size / 1048576, 1).' MB' : max(1, round($this->proof_size / 1024)).' KB';
     }
 
-    /* ---------------- Investor matching ---------------- */
+    /* ---------------- Investor matching ----------------
+     | An investor is identified by their ID / passport number (or company registration number).
+     | Records without a number are matched by name, and are linked to the number when the same
+     | name appears elsewhere with one (e.g. older records, or the profile's investor list).
+     |   matchKey()  → "id:0123456789"  or  "nm:basotho capital"
+     */
 
-    /** "Basotho Capital (Pty) Ltd" → "basotho capital" — used to spot the same investor across records */
+    /** "Basotho Capital (Pty) Ltd" → "basotho capital" */
     public static function investorKey(?string $name): string
     {
         $n = Str::of((string) $name)->lower()->replaceMatches('/[^a-z0-9 ]+/', ' ')->squish()->toString();
         $n = preg_replace('/\b(pty|ltd|limited|inc|llc|plc|co|company|proprietary)\b/', '', $n);
 
         return trim(preg_replace('/\s+/', ' ', $n));
+    }
+
+    /** "RA 012-345/67" → "RA01234567" (spaces, dashes and slashes ignored) */
+    public static function normaliseId(?string $id): string
+    {
+        return strtoupper(preg_replace('/[^A-Za-z0-9]+/', '', (string) $id));
+    }
+
+    /** name key => id key, built from every investment and every profile's investor list (once per request) */
+    protected static ?array $nameToId = null;
+
+    public static function nameToIdMap(): array
+    {
+        if (self::$nameToId !== null) {
+            return self::$nameToId;
+        }
+
+        $map = [];
+        $add = function ($name, $id) use (&$map) {
+            $nk = self::investorKey($name);
+            $ik = self::normaliseId($id);
+            if ($nk !== '' && $ik !== '' && ! isset($map[$nk])) {
+                $map[$nk] = 'id:'.$ik;
+            }
+        };
+
+        self::query()->whereNotNull('investor_id_number')->where('investor_id_number', '!=', '')
+            ->orderByDesc('id')->get(['investor_name', 'investor_id_number'])
+            ->each(fn ($i) => $add($i->investor_name, $i->investor_id_number));
+
+        EnterpriseProfile::query()->whereNotNull('round_investors')->get(['id', 'round_investors'])
+            ->each(fn ($p) => collect($p->investorRows())->each(fn ($r) => $add($r['name'] ?? '', $r['id_number'] ?? '')));
+
+        return self::$nameToId = $map;
+    }
+
+    /** Forget the cached map (after saving an investment) */
+    public static function forgetIdMap(): void
+    {
+        self::$nameToId = null;
+    }
+
+    /** The key that identifies an investor: their ID number, otherwise their (linked) name */
+    public static function matchKey(?string $idNumber, ?string $name): string
+    {
+        $id = self::normaliseId($idNumber);
+        if ($id !== '') {
+            return 'id:'.$id;
+        }
+
+        $nk = self::investorKey($name);
+
+        return self::nameToIdMap()[$nk] ?? 'nm:'.$nk;
+    }
+
+    /** Key for this investment */
+    public function getInvestorKeyAttribute(): string
+    {
+        return self::matchKey($this->investor_id_number, $this->investor_name);
     }
 
     /**
@@ -122,13 +188,14 @@ class EnterpriseInvestment extends Model
     public static function byInvestor(Collection $investments): Collection
     {
         return $investments
-            ->groupBy(fn (self $i) => self::investorKey($i->investor_name))
+            ->groupBy(fn (self $i) => $i->investor_key)
             ->map(function (Collection $items, string $key) {
                 $counted = $items->where('status', '!=', self::STATUS_REJECTED);
 
                 return [
                     'key'      => $key,
                     'name'     => $items->sortByDesc('invested_on')->first()->investor_name,
+                    'id_number'=> $items->pluck('investor_id_number')->filter()->last(),
                     'type'     => $items->pluck('investor_type')->filter()->last(),
                     'country'  => $items->pluck('investor_country')->filter()->last(),
                     'count'    => $counted->count(),
@@ -168,9 +235,9 @@ class EnterpriseInvestment extends Model
         // Investments made (all enterprises)
         self::query()->with('profile:id,registered_name,short_name')
             ->where('status', '!=', self::STATUS_REJECTED)
-            ->get(['id', 'enterprise_profile_id', 'investor_name', 'amount', 'invested_on', 'status'])
+            ->get(['id', 'enterprise_profile_id', 'investor_name', 'investor_id_number', 'amount', 'invested_on', 'status'])
             ->each(function (self $i) use ($keys, &$per, $label, $blank) {
-                $k = self::investorKey($i->investor_name);
+                $k = $i->investor_key;
                 if (! in_array($k, $keys, true)) {
                     return;
                 }
@@ -191,7 +258,7 @@ class EnterpriseInvestment extends Model
             ->get(['id', 'registered_name', 'short_name', 'round_investors'])
             ->each(function (EnterpriseProfile $p) use ($keys, &$per, $label, $blank) {
                 foreach ($p->investorRows() as $r) {
-                    $k = self::investorKey($r['name'] ?? '');
+                    $k = self::matchKey($r['id_number'] ?? null, $r['name'] ?? '');
                     if (! in_array($k, $keys, true)) {
                         continue;
                     }
@@ -219,14 +286,16 @@ class EnterpriseInvestment extends Model
     /** "Basotho Capital: 5 investments in 3 enterprises (M 4,200,000)" — one line per investor, for the gates */
     public static function trackRecordLines(EnterpriseProfile $profile): array
     {
-        $names = collect($profile->investments)->where('status', '!=', self::STATUS_REJECTED)->pluck('investor_name')
-            ->merge(collect($profile->investorRows())->pluck('name'))
-            ->unique(fn ($n) => self::investorKey($n))->values();
+        $people = collect($profile->investments)->where('status', '!=', self::STATUS_REJECTED)
+            ->map(fn ($i) => ['key' => $i->investor_key, 'name' => $i->investor_name])
+            ->merge(collect($profile->investorRows())->map(fn ($r) => ['key' => self::matchKey($r['id_number'] ?? null, $r['name'] ?? ''), 'name' => $r['name']]))
+            ->unique('key')->values();
 
-        $record = self::facilityRecord($names->map(fn ($n) => self::investorKey($n))->all(), $profile->id);
+        $record = self::facilityRecord($people->pluck('key')->all(), $profile->id);
 
-        return $names->map(function ($name) use ($record) {
-            $r = $record[self::investorKey($name)] ?? null;
+        return $people->map(function ($person) use ($record) {
+            $name = $person['name'];
+            $r    = $record[$person['key']] ?? null;
             if (! $r || $r['investments'] === 0) {
                 return "{$name}: no recorded investments in the facility yet";
             }

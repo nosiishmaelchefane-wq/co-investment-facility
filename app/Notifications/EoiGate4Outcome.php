@@ -10,9 +10,9 @@ use Illuminate\Notifications\Notification;
 use Illuminate\Support\Facades\Route;
 
 /**
- * G4 · Final authorisation result e-mailed to the applicant (matches what they see on the G4 tab):
- *   Authorised     → next: conditions precedent & Grant Agreement (+ the conditions still to be met). Not a payment.
- *   Not authorised → the transaction will not proceed.
+ * G5 · Final authorisation result e-mailed to the applicant (matches what they see on the G5 tab):
+ *   Formally approved → both signatures on the Grant Agreement; next: conditions precedent & onboarding (+ conditions still to be met). Not a payment.
+ *   Not approved      → the grant will not proceed.
  * A clarification round is internal (the PMU contacts the applicant if anything is needed), so no e-mail for it.
  */
 class EoiGate4Outcome extends Notification
@@ -44,18 +44,19 @@ class EoiGate4Outcome extends Notification
         $a    = $this->auth;
         $rate = (float) config('cif.usd_to_lsl', 18.00);
 
-        $mail->subject('Congratulations: '.$eoi->reference.' has received final authorisation')
-            ->line('We are pleased to let you know that your transaction'.$this->forBusiness()
-                .' (reference **'.$eoi->reference.'**) has received **final authorisation** under the CAFI Co-Investment Facility.');
+        $mail->subject('Congratulations: your grant for '.$eoi->reference.' has been formally approved')
+            ->line('We are pleased to let you know that the grant for your transaction'.$this->forBusiness()
+                .' (reference **'.$eoi->reference.'**) has been **formally approved** under the CAFI Co-Investment Facility: '
+                .'the Grant Agreement has been signed by the CAFI Managing Director and the MTIBD Principal Secretary.');
 
         if ($a->grant_amount !== null) {
-            $mail->line('**Authorised CAFI grant:** M '.number_format((float) $a->grant_amount)
+            $mail->line('**Approved CAFI grant:** M '.number_format((float) $a->grant_amount)
                 .' (US$ '.number_format((float) $a->grant_amount / max($rate, 0.0001)).')');
         }
 
-        $mail->line('**Next step:** meeting the **conditions precedent** and signing the **Grant Agreement** (Gate 5). '
+        $mail->line('**Next step:** meeting the **conditions precedent** and **onboarding** (Gate 6). '
                 .'The LEHSFF team will contact you to take this forward.')
-            ->line('Please note: authorisation does not itself trigger payment. The grant is released in tranches after Gate 5, '
+            ->line('Please note: approval does not itself trigger payment. The grant is released in tranches after Gate 6, '
                 .'once your investor’s capital has been verified.');
 
         $open = collect($a->conditions ?? [])->where('status', 'open')->filter(fn ($c) => filled($c['finding'] ?? null))->values();
@@ -77,7 +78,7 @@ class EoiGate4Outcome extends Notification
         return $mail->subject('Outcome of your application '.$eoi->reference)
             ->line('Thank you for your patience while your transaction'.$this->forBusiness()
                 .' (reference **'.$eoi->reference.'**) went through final authorisation.')
-            ->line('We regret to inform you that it **did not receive final authorisation** and will not proceed further under the Co-Investment Facility.')
+            ->line('We regret to inform you that the grant **was not approved** and will not proceed further under the Co-Investment Facility.')
             ->action('View my application', $this->applicationUrl())
             ->line('If you have any questions about this decision, reply to this e-mail or contact the LEHSFF team.');
     }

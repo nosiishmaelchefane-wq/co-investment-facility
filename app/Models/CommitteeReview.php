@@ -23,15 +23,15 @@ class CommitteeReview extends Model
 
     /** §3.4.4 — outcome => [label, meaning, next step, icon, pill] */
     public const OUTCOMES = [
-        self::OUTCOME_APPROVE     => ['Approve',              'Sufficient basis to recommend the transaction.',         'Proceed to Gate 4',                            'bi-check2-circle', 'pill-ok'],
-        self::OUTCOME_CONDITIONAL => ['Conditional approval', 'Supported, subject to defined conditions.',               'Address conditions, then Gate 4',              'bi-check2-square', 'pill-ok'],
+        self::OUTCOME_APPROVE     => ['Approve',              'Sufficient basis to recommend the transaction.',         'Proceed to Gate 4 · Grant readiness',                            'bi-check2-circle', 'pill-ok'],
+        self::OUTCOME_CONDITIONAL => ['Conditional approval', 'Supported, subject to defined conditions.',               'Address conditions, then Gate 4 · Grant readiness',              'bi-check2-square', 'pill-ok'],
         self::OUTCOME_DEFER       => ['Defer',                'Additional information or assessment is required.',     'Return for specified action and resubmission', 'bi-pause-circle',  'pill-warn'],
         self::OUTCOME_REJECT      => ['Reject',               'The transaction should not proceed under the Facility.', 'Close the transaction',                        'bi-x-octagon',     'pill-danger'],
     ];
 
     public const OUTCOME_TO_EOI_STATUS = [
-        self::OUTCOME_APPROVE     => ExpressionOfInterest::STATUS_AUTHORISATION,
-        self::OUTCOME_CONDITIONAL => ExpressionOfInterest::STATUS_AUTHORISATION,
+        self::OUTCOME_APPROVE     => ExpressionOfInterest::STATUS_GRANT_READINESS,   // → Gate 4 grant readiness review
+        self::OUTCOME_CONDITIONAL => ExpressionOfInterest::STATUS_GRANT_READINESS,
         self::OUTCOME_DEFER       => ExpressionOfInterest::STATUS_IC_DEFERRED,
         self::OUTCOME_REJECT      => ExpressionOfInterest::STATUS_NOT_PROGRESSED,
     ];
@@ -74,7 +74,7 @@ class CommitteeReview extends Model
     /** §3.4.1 — Committee information pack: key => [document, purpose, icon, G2 anchor] */
     public const PACK = [
         'tss'         => ['Transaction Summary Sheet',          'Concise overview of the transaction',            'bi-file-earmark-text',  'g2-summary'],
-        'iam'         => ['Investment Appraisal Memorandum',    'Consolidated assessment and recommendation',     'bi-file-earmark-pdf',   null],
+        'iam'         => ['Investment Appraisal Memorandum',    'The five appraisal questions answered by the PMU', 'bi-file-earmark-pdf', 'g2-summary'],
         'enterprise'  => ['Enterprise DD findings',             'Key findings on enterprise capacity and risks',  'bi-building',           'g2-area-enterprise'],
         'investor'    => ['Investor DD findings',               'Investor identity, capacity and commitment',     'bi-briefcase',          'g2-area-investor'],
         'transaction' => ['Transaction documentation',          'Evidence of transaction structure and maturity', 'bi-file-earmark-ruled', 'g2-area-transaction'],
@@ -179,7 +179,12 @@ class CommitteeReview extends Model
 
     /**
      * Consolidated view (only meaningful once complete).
-     * ['criteria' => [key => ['met' => n, 'not_met' => n, 'majority' => met|not_met|tie]], 'recommendation' => [...]]
+     * [
+     *   'criteria'       => [key => ['met', 'not_met', 'majority' => met|not_met|tie, 'average' => 1–5 | null]],
+     *   'totals'         => [user_id => ['score', 'pct']],
+     *   'average_score'  => average member total, 'average_pct' => %, 'max' => maximum total,
+     *   'recommendation' => ['approve', 'reject', 'majority' => approve|reject|tie],
+     * ]
      */
     public function consolidated(): array
     {
@@ -188,17 +193,29 @@ class CommitteeReview extends Model
         $majority = fn (int $yes, int $no) => $yes > $no ? 'met' : ($no > $yes ? 'not_met' : 'tie');
 
         $criteria = collect(CommitteeScorecard::criteriaKeys())->mapWithKeys(function ($k) use ($cards, $majority) {
-            $met = $cards->filter(fn ($c) => ($c->answers[$k] ?? null) === 'met')->count();
-            $not = $cards->filter(fn ($c) => ($c->answers[$k] ?? null) === 'not_met')->count();
+            $scores = $cards->map(fn ($c) => $c->scoreFor($k))->filter(fn ($v) => $v !== null);
+            $met    = $scores->filter(fn ($v) => $v >= CommitteeScorecard::MET_FROM)->count();
+            $not    = $scores->count() - $met;
 
-            return [$k => ['met' => $met, 'not_met' => $not, 'majority' => $majority($met, $not)]];
+            return [$k => [
+                'met'      => $met,
+                'not_met'  => $not,
+                'majority' => $majority($met, $not),
+                'average'  => $scores->isNotEmpty() ? round($scores->avg(), 1) : null,
+            ]];
         })->all();
+
+        $totals = $cards->mapWithKeys(fn ($c) => [$c->user_id => ['score' => $c->totalScore(), 'pct' => $c->scorePct()]]);
 
         $approve = $cards->where('recommendation', 'approve')->count();
         $reject  = $cards->where('recommendation', 'reject')->count();
 
         return [
             'criteria'       => $criteria,
+            'totals'         => $totals->all(),
+            'average_score'  => $totals->isNotEmpty() ? round($totals->avg('score'), 1) : null,
+            'average_pct'    => $totals->isNotEmpty() ? (int) round($totals->avg('pct')) : null,
+            'max'            => CommitteeScorecard::maxScore(),
             'recommendation' => [
                 'approve'  => $approve,
                 'reject'   => $reject,

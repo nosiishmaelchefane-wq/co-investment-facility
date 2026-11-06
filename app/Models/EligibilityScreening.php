@@ -197,7 +197,7 @@ class EligibilityScreening extends Model
             : [];
 
         $docMissing = fn () => $p
-            ? collect($p->missingDocuments())->map(fn ($t) => (EnterpriseDocument::TYPES[$t][0] ?? $t).' not uploaded')->all()
+            ? collect($p->missingDocuments())->map(fn ($t) => EnterpriseDocument::missingLabel($t).' not uploaded')->unique()->values()->all()
             : [];
         $profileBlank = fn (array $fields) => $p
             ? collect($fields)->filter(fn ($label, $f) => blank($p->{$f}))->map(fn ($label) => "Enterprise profile: {$label} not provided")->values()->all()
@@ -225,23 +225,47 @@ class EligibilityScreening extends Model
                     ? ['EOI: investor amount (US$ '.number_format((float) $eoi->investor_amount_usd).') is below the US$ '.number_format(EnterpriseProfile::minInvestorUsd()).' minimum']
                     : []),
                 ...$noProfile,
-                ...$profileBlank(['investor_name' => 'participating investors', 'participation' => 'financing type']),
+                ...$profileBlank(['participation' => 'financing type']),
+                ...($p && $p->has_investor === false ? ['Enterprise profile: the enterprise says it has no participating investor'] : []),
+                ...($p && $p->has_investor !== false && $p->investorRows() === [] ? ['Enterprise profile: participating investors not provided'] : []),
+                ...($p && collect($p->investorRows())->contains(fn ($r) => ! is_numeric($r['ticket'] ?? null) || (float) $r['ticket'] <= 0)
+                    ? ['Enterprise profile: an investor has no investment amount'] : []),
+                ...($p && collect($p->investorRows())->contains(fn ($r) => blank($r['id_number'] ?? null))
+                    ? ['Enterprise profile: an investor has no ID / passport / registration number'] : []),
+                ...($p && $p->investorAmount() !== null && ! EnterpriseProfile::meetsInvestorMinimum($p->investorAmount())
+                    ? ['Enterprise profile: investor amount (M '.number_format($p->investorAmount()).') is below the US$ '.number_format(EnterpriseProfile::minInvestorUsd()).' minimum'] : []),
             ],
             'transaction' => [
                 ...$eoiMissing(['investment_required_usd' => 'total investment required', 'investment_types' => 'type of investment']),
                 ...$noProfile,
-                ...$profileBlank(['round_amount' => 'current investment round', 'participation' => 'financing type']),
+                ...$profileBlank(['round_amount' => 'current investment round', 'participation' => 'financing type', 'project_cost' => 'total project cost']),
+                ...(in_array('debt', (array) $eoi->investment_types, true) ? ['EOI: debt is not an eligible instrument for co-investment'] : []),
+                ...($p && $p->project_cost !== null && $p->grant_requested && (float) $p->project_cost < (float) $p->grant_requested
+                    ? ['Enterprise profile: total project cost is less than the CAFI grant'] : []),
             ],
             'use_of_funds' => [
                 ...$eoiMissing(['use_of_funds' => 'use of investment', 'use_of_funds_description' => 'planned use of the investment']),
                 ...$noProfile,
                 ...($p && ! $p->document('budget') ? ['Enterprise profile: operational budget (incl. use of the grant) not uploaded'] : []),
+                ...$p ? (function () use ($p) {
+                    $t = $p->budgetTotals();
+                    if ($t['private'] <= 0 && $t['grant'] <= 0) {
+                        return ['Enterprise profile: grant utilisation budget not filled in'];
+                    }
+                    $inv = $p->investorAmount();
+
+                    return array_values(array_filter([
+                        $inv !== null && abs($t['private'] - $inv) >= 1 ? 'Enterprise profile: budget investor column (M '.number_format($t['private']).') does not equal the investor amount (M '.number_format($inv).')' : null,
+                        ! $p->budgetMatchesGrant() ? 'Enterprise profile: budget CAFI grant column (M '.number_format($t['grant']).') does not equal the matching grant (M '.number_format((float) $p->grant_requested).')' : null,
+                    ]));
+                })() : [],
             ],
             'declarations' => [
                 ...(! $eoi->declaration_agree ? ['EOI: declaration not accepted'] : []),
                 ...$eoiMissing(['declaration_name' => 'name of person making the declaration', 'declaration_date' => 'declaration date']),
                 ...$noProfile,
                 ...($p && ! $p->declaration_agreed ? ['Enterprise profile: declaration not signed'] : []),
+                ...($p && ! $p->es_confirmed ? ['Enterprise profile: E&S checklist answers not confirmed'] : []),
             ],
             'submission' => [
                 ...($eoi->submitted_at ? [] : ['EOI has not been formally submitted']),
