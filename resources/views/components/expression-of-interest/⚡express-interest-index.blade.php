@@ -34,13 +34,17 @@ new class extends Component
         return self::GROUPS[$value] ?? [$value];
     }
 
-    /** Staff see every application; enterprises see their own. */
+    /**
+     * Staff see the staff list (with the applicant column); enterprises see their own.
+     * Committee and Finance are staff too — the list itself is still limited by ExpressionOfInterest::visibleTo()
+     * (Committee: transactions sent to it · Finance: transactions at Gate 6 / cleared for disbursement).
+     */
     #[Computed]
     public function seesAll(): bool
     {
         $user = auth()->user();
 
-        return ! $user->hasRole('enterprise') && ($user->can('eoi.view-all') || $user->can('gate3.score'));
+        return ! $user->hasRole('enterprise') && $user->canAny(['eoi.view-all', 'gate3.score', 'disburse.process']);
     }
 
     /** The logged-in enterprise's profile (unsaved if never started) */
@@ -166,9 +170,10 @@ new class extends Component
             'dd_hold'        => ['DD on hold',     'status-referred',  'bi-pause-circle'],
             'committee'      => ['Investment Committee', 'status-approved', 'bi-people'],
             'ic_deferred'    => ['Deferred by IC', 'status-referred',  'bi-pause-circle'],
+            'grant_readiness' => ['Grant readiness review', 'status-in-review', 'bi-clipboard-check'],
             'authorisation'  => ['Final authorisation', 'status-approved', 'bi-patch-check'],
             'authorisation_hold' => ['Authorisation on hold', 'status-referred', 'bi-pause-circle'],
-            'authorised'     => ['Authorised',     'status-approved',  'bi-patch-check-fill'],
+            'authorised'     => ['Formally approved',     'status-approved',  'bi-patch-check-fill'],
             'capital_pending' => ['Awaiting investor capital', 'status-referred', 'bi-shield-exclamation'],
             'cleared'        => ['Cleared for disbursement', 'status-approved', 'bi-cash-coin'],
             'escalated'      => ['Escalated',      'status-rejected',  'bi-exclamation-octagon'],

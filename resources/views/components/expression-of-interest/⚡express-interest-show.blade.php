@@ -61,7 +61,7 @@ new class extends Component
 
     protected function allowedTabs(): array
     {
-        return ['overview', 'g1', 'g2', 'g3', 'g4', 'g5', ...($this->showInvestments ? ['investments'] : [])];
+        return ['overview', 'g1', 'g2', 'g3', 'readiness', 'g4', 'g5', ...($this->showInvestments ? ['investments'] : [])];
     }
 
     /** The edit drawer saved, or a gate decision was recorded → reload the record */
@@ -141,9 +141,10 @@ new class extends Component
         'dd_hold'        => ['DD on hold',     'status-referred',  'bi-pause-circle'],
         'committee'      => ['Investment Committee', 'status-approved', 'bi-people'],
         'ic_deferred'    => ['Deferred by IC', 'status-referred',  'bi-pause-circle'],
+        'grant_readiness' => ['Grant readiness review', 'status-in-review', 'bi-clipboard-check'],
         'authorisation'  => ['Final authorisation', 'status-approved', 'bi-patch-check'],
         'authorisation_hold' => ['Authorisation on hold', 'status-referred', 'bi-pause-circle'],
-        'authorised'     => ['Authorised',     'status-approved',  'bi-patch-check-fill'],
+        'authorised'     => ['Formally approved',     'status-approved',  'bi-patch-check-fill'],
         'capital_pending' => ['Awaiting investor capital', 'status-referred', 'bi-shield-exclamation'],
         'cleared'        => ['Cleared for disbursement', 'status-approved', 'bi-cash-coin'],
         'escalated'      => ['Escalated',      'status-rejected',  'bi-exclamation-octagon'],
@@ -163,7 +164,7 @@ new class extends Component
         'draft', 'withdrawn'        => -1,
         'submitted', 'returned'     => 0,
         'in_review'                 => 1,
-        'invited', 'not_progressed', 'due_diligence', 'dd_hold', 'committee', 'ic_deferred', 'authorisation', 'authorisation_hold', 'authorised', 'capital_pending', 'cleared', 'escalated' => 3,
+        'invited', 'not_progressed', 'due_diligence', 'dd_hold', 'committee', 'ic_deferred', 'grant_readiness', 'authorisation', 'authorisation_hold', 'authorised', 'capital_pending', 'cleared', 'escalated' => 3,
         default                     => 0,
     };
 
@@ -214,9 +215,18 @@ new class extends Component
         $latestG3?->isDecided() && $latestG3->outcome === 'reject'                   => 'failed',
         default                                                                      => 'current',
     };
+    // Gate 4 · Grant readiness (tab "readiness"). Transactions authorised before Gate 4 existed count as passed.
+    $latestGR = $eoi->grantReadinesses()->orderByDesc('round')->first();
+    $grState = match (true) {
+        $g3State !== 'passed'                                                        => 'locked',
+        (bool) $latestGR?->isApproved()                                              => 'passed',
+        ! $latestGR && in_array($eoi->status, ['authorisation', 'authorisation_hold', 'authorised', 'capital_pending', 'cleared', 'escalated'], true) => 'passed',
+        default                                                                      => 'current',
+    };
+    // Gate 5 · Final authorisation (tab key "g4" kept for existing links)
     $latestG4 = $eoi->authorisations()->orderByDesc('round')->first();
     $g4State = match (true) {
-        $g3State !== 'passed'                                                        => 'locked',
+        $grState !== 'passed'                                                        => 'locked',
         $latestG4?->outcome === 'authorised'                                         => 'passed',
         $latestG4?->outcome === 'not_authorised'                                     => 'failed',
         default                                                                      => 'current',
@@ -224,15 +234,16 @@ new class extends Component
     $latestG5 = $eoi->conditionReview;
     $g5State = match (true) {
         $g4State !== 'passed'                => 'locked',
-        $latestG5?->outcome === 'cleared'    => 'passed',
+        $latestG5?->isFullyDisbursed()       => 'passed',
         default                              => 'current',
     };
     $gates = [
         'g1' => ['code' => 'G1', 'label' => 'Eligibility Screening', 'short' => 'Eligibility',   'icon' => 'bi-funnel-fill',          'state' => $g1State],
         'g2' => ['code' => 'G2', 'label' => 'Due Diligence & ESGC',  'short' => 'Due Diligence', 'icon' => 'bi-search',               'state' => $g2State],
         'g3' => ['code' => 'G3', 'label' => 'Committee Evaluation',  'short' => 'Committee',     'icon' => 'bi-clipboard2-data-fill', 'state' => $g3State],
-        'g4' => ['code' => 'G4', 'label' => 'Final Authorisation',   'short' => 'Authorisation', 'icon' => 'bi-patch-check-fill',     'state' => $g4State],
-        'g5' => ['code' => 'G5', 'label' => 'Conditions Precedent',  'short' => 'Conditions',    'icon' => 'bi-list-check',           'state' => $g5State],
+        'readiness' => ['code' => 'G4', 'label' => 'Grant Readiness Review', 'short' => 'Readiness', 'icon' => 'bi-clipboard-check',  'state' => $grState],
+        'g4' => ['code' => 'G5', 'label' => 'Final Authorisation',   'short' => 'Authorisation', 'icon' => 'bi-patch-check-fill',     'state' => $g4State],
+        'g5' => ['code' => 'G6', 'label' => 'Conditions Precedent & Disbursement (G6–G7)', 'short' => 'Conditions & Disbursement', 'icon' => 'bi-list-check', 'state' => $g5State],
     ];
     $gateStates = [
         'passed'  => ['Passed',      'pill-ok',     'bi-check-circle-fill'],
@@ -731,6 +742,7 @@ new class extends Component
             @if ($tab === 'g1') <livewire:expression-of-interest.eligibility.check-eligibility :eoi-id="$eoi->id" wire:key="g1-{{ $eoi->id }}" /> @endif
             @if ($tab === 'g2') <livewire:expression-of-interest.due-diligence.due-deligence-check :eoi-id="$eoi->id" wire:key="g2-{{ $eoi->id }}" /> @endif
             @if ($tab === 'g3') <livewire:expression-of-interest.committee.committee-review :eoi-id="$eoi->id" wire:key="g3-{{ $eoi->id }}" /> @endif
+            @if ($tab === 'readiness') <livewire:expression-of-interest.readiness.grant-readiness :eoi-id="$eoi->id" wire:key="readiness-{{ $eoi->id }}" /> @endif
             @if ($tab === 'g4') <livewire:expression-of-interest.authorisation.authorise-application :eoi-id="$eoi->id" wire:key="g4-{{ $eoi->id }}" /> @endif
             @if ($tab === 'g5') <livewire:expression-of-interest.conditions.condition-review :eoi-id="$eoi->id" wire:key="g5-{{ $eoi->id }}" /> @endif
         </div>

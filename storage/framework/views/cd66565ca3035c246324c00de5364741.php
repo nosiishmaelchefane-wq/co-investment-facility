@@ -1,0 +1,1 @@
+<div class="col-lg-7"><div class="card card-modern h-100"><div class="card-body placeholder-glow"><span class="placeholder col-4 mb-3"></span><span class="placeholder col-12" style="height: 280px"></span></div></div></div><?php /**PATH C:\laragon\www\co-investment-facility\storage\framework\views/407c180f9e8a94d222636649af7f2399.blade.php ENDPATH**/ ?>

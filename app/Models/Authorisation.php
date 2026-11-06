@@ -6,41 +6,43 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 /**
- * Gate 4 · Final Authorisation (CI Facility Operations Manual §3.5). One row per round. Amounts in Maloti.
+ * Gate 5 · Final Authorisation (CI Facility Operations Manual §3.6). One row per round. Amounts in Maloti.
  *
- *   Gate 3 recommendation → CAFI Managing Director review → MTIBD Principal Secretary final authorisation → Gate 5
- *   Sequential, not concurrent: the Principal Secretary can only act after the Managing Director approves.
+ *   Gate 4 Grant readiness → CAFI Managing Director signs the Grant Agreement → MTIBD Principal Secretary signs → Gate 6
+ *   Sequential: the Principal Secretary only acts after the Managing Director has signed. Both signatures = formal approval.
+ *   Inputs: Grant Readiness Memo, Draft Grant Agreement, Investment Committee recommendation and the transaction file.
+ *   (Table / permission names keep "gate4" from before Gate 4 Grant readiness was added.)
  */
 class Authorisation extends Model
 {
-    /* ---------------- §3.5.2 Managing Director ---------------- */
+    /* ---------------- §3.6.1 Managing Director review and signature ---------------- */
 
-    /** check => text — what the Managing Director confirms */
+    /** check => text — what the Managing Director confirms before signing */
     public const MD_CHECKS = [
+        'readiness'      => 'Gate 4 is complete: the Grant Readiness Memo recommends Ready to Proceed, approved by the Hub Manager and the PMU Director of Implementation',
+        'memo'           => 'The Grant Readiness Memo, Draft Grant Agreement and supporting transaction file have been reviewed',
+        'process'        => 'The prescribed review process has been completed (Gates 1–4)',
         'recommendation' => 'The Investment Committee recommendation is properly documented',
-        'stages'         => 'The transaction has completed the required assessment stages (Gates 1–3)',
-        'grant'          => 'The proposed grant amount is consistent with the applicable co-investment parameters',
-        'risks'          => 'Material risks and ESGC matters have been identified and addressed',
-        'conditions'     => 'Any Committee conditions are clearly defined',
-        'suitable'       => 'The transaction is suitable for progression to final authorisation',
+        'terms'          => 'The proposed grant amount and terms in the Grant Agreement are consistent with the Facility’s requirements',
+        'conditions'     => 'Conditions attached and outstanding matters are clearly documented',
     ];
 
     /** decision => [label, description, icon] */
     public const MD_DECISIONS = [
-        'approve' => ['Approve & forward',        'Forward to the MTIBD Principal Secretary for final authorisation.', 'bi-send-check'],
-        'return'  => ['Return for clarification', 'Material information is insufficient — return for refinement.',   'bi-arrow-return-left'],
-        'decline' => ['Not approve',              'The transaction does not proceed to final authorisation.',          'bi-x-octagon'],
+        'approve' => ['Sign & forward',                              'Signs the Grant Agreement and forwards it to the MTIBD Principal Secretary.', 'bi-pen'],
+        'return'  => ['Return for clarification or corrective action', 'Material issues — returned before proceeding.',                               'bi-arrow-return-left'],
+        'decline' => ['Not approve',                                 'The Managing Director does not sign — the grant cannot proceed.',              'bi-x-octagon'],
     ];
 
-    /* ---------------- §3.5.3 Principal Secretary ---------------- */
+    /* ---------------- §3.6.2 Principal Secretary review and signature ---------------- */
 
     public const PS_DECISIONS = [
-        'authorise' => ['Authorise',             'Final authorisation — proceed to Gate 5.',                    'bi-patch-check'],
-        'clarify'   => ['Request clarification', 'Further information is needed before authorising.',           'bi-question-circle'],
-        'decline'   => ['Decline',               'No final authorisation — the transaction exits the process.', 'bi-x-octagon'],
+        'authorise' => ['Sign — formally approve',                       'Both signatures complete: the grant is formally approved → Gate 6.', 'bi-patch-check'],
+        'clarify'   => ['Return for clarification or corrective action', 'Material issues to resolve before formal approval.',                 'bi-arrow-return-left'],
+        'decline'   => ['Not approve',                                   'The Principal Secretary does not sign — the grant cannot proceed.',  'bi-x-octagon'],
     ];
 
-    /* ---------------- §3.5.5 Outcomes ---------------- */
+    /* ---------------- Possible outcomes ---------------- */
 
     public const OUTCOME_AUTHORISED     = 'authorised';
     public const OUTCOME_CLARIFICATION  = 'clarification';
@@ -48,9 +50,9 @@ class Authorisation extends Model
 
     /** outcome => [label, meaning, next step, icon, pill] */
     public const OUTCOMES = [
-        self::OUTCOME_AUTHORISED     => ['Authorised',                     'The required sequential approvals were received.',                 'Proceed to Gate 5',                          'bi-patch-check',       'pill-ok'],
-        self::OUTCOME_CLARIFICATION  => ['Clarification / further action', 'More information or action is needed before authorisation.',      'Resolve and resubmit at the relevant stage', 'bi-arrow-return-left', 'pill-warn'],
-        self::OUTCOME_NOT_AUTHORISED => ['Not authorised',                 'The required institutional approval was not received.',            'Process ends — the applicant is notified',   'bi-x-octagon',         'pill-danger'],
+        self::OUTCOME_AUTHORISED     => ['Formally approved',                              'The CAFI Managing Director and the MTIBD Principal Secretary have both signed the Grant Agreement.', 'Proceed to Gate 6 · Conditions precedent & onboarding', 'bi-patch-check',       'pill-ok'],
+        self::OUTCOME_CLARIFICATION  => ['Returned for clarification or corrective action', 'A signatory identified issues that must be resolved before the agreement can proceed.',          'Resolve and resubmit to the signatory',                 'bi-arrow-return-left', 'pill-warn'],
+        self::OUTCOME_NOT_AUTHORISED => ['Not approved',                                   'The grant did not receive the required signatures and cannot proceed.',                           'Process ends — the applicant is notified',              'bi-x-octagon',         'pill-danger'],
     ];
 
     public const OUTCOME_TO_EOI_STATUS = [
@@ -59,7 +61,7 @@ class Authorisation extends Model
         self::OUTCOME_NOT_AUTHORISED => ExpressionOfInterest::STATUS_NOT_PROGRESSED,
     ];
 
-    /* ---------------- §3.5.4 Conditions ---------------- */
+    /* ---------------- Conditions attached ---------------- */
 
     /** type => [label, treatment, blocks authorisation while open] */
     public const CONDITION_TYPES = [
@@ -67,15 +69,16 @@ class Authorisation extends Model
         'legal_doc' => ['Legal or transaction documentation',      'Address as a contracting condition',                       false],
         'esgc'      => ['ESGC mitigation',                         'Incorporate into the Grant Agreement or monitoring',       false],
         'investor'  => ['Investor commitment condition',           'Verify before grant disbursement',                         false],
-        'cp'        => ['Condition precedent to grant agreement',  'Carry into Gate 5',                                        false],
+        'cp'        => ['Condition precedent to grant agreement',  'Carry into Gate 6',                                        false],
         'material'  => ['Material unresolved issue',               'Return for further assessment before progression',         true],
     ];
 
-    public const CONDITION_SOURCES = ['g2' => 'Gate 2', 'g3' => 'Gate 3', 'g4' => 'Gate 4'];
+    /** Source of a condition. 'g4' = added at final authorisation (shown as Gate 5); 'readiness' = Gate 4 outstanding issue */
+    public const CONDITION_SOURCES = ['g2' => 'Gate 2', 'g3' => 'Gate 3', 'readiness' => 'Gate 4', 'g4' => 'Gate 5'];
 
     /* ---------------- Signing outside the system ---------------- */
 
-    /** The MD and PS do not log in — the PMU sends them the document itself (no e-mail from the system), uploads the signed copy and records the decision. */
+    /** The MD and PS do not log in — the PMU sends them the Grant Agreement itself (no e-mail from the system), uploads the signed copy and records the decision. */
     public const DISK = 'local';
 
     public const MAX_KB = 20480;
@@ -224,9 +227,18 @@ class Authorisation extends Model
         };
     }
 
-    /** Conditions from the Committee record (G2 ones it accepted/amended + its own), ready to classify */
-    public static function conditionsFrom(?CommitteeReview $review): array
+    /** Conditions from the Committee record (G2 ones it accepted/amended + its own) and Gate 4's open issues, ready to classify */
+    public static function conditionsFrom(?CommitteeReview $review, ?GrantReadiness $readiness = null): array
     {
+        $gate4 = collect($readiness?->issues ?? [])
+            ->filter(fn ($i) => ($i['status'] ?? 'open') !== 'resolved' && filled($i['issue'] ?? null))
+            ->map(fn ($i) => [
+                'source'  => 'readiness',
+                'finding' => (string) $i['issue'].(filled($i['action'] ?? null) ? ' — '.$i['action'] : ''),
+                'type'    => null,
+                'status'  => 'open',
+            ]);
+
         return collect($review?->conditions ?? [])
             ->filter(fn ($c) => ($c['decision'] ?? null) !== 'removed' && filled($c['finding'] ?? null))
             ->map(fn ($c) => [
@@ -234,7 +246,7 @@ class Authorisation extends Model
                 'finding' => (string) $c['finding'],
                 'type'    => self::guessType($c['treatment'] ?? null),
                 'status'  => ($c['status'] ?? 'open') === 'resolved' ? 'resolved' : 'open',
-            ])->values()->all();
+            ])->merge($gate4)->values()->all();
     }
 
     /** Why the Managing Director can't approve yet (empty = ready) */
@@ -251,14 +263,14 @@ class Authorisation extends Model
         ]));
     }
 
-    /** Next stage shown in the decision record (§3.5.6) */
+    /** Authorised next stage shown in the decision record */
     public function nextStage(): ?string
     {
         return match ($this->outcome) {
-            self::OUTCOME_AUTHORISED     => 'Gate 5 · Conditions precedent & Grant Agreement',
+            self::OUTCOME_AUTHORISED     => 'Gate 6 · Conditions precedent & onboarding',
             self::OUTCOME_CLARIFICATION  => $this->heldBy() === 'ps' ? 'Resubmit to the Principal Secretary' : 'Resubmit to the Managing Director',
             self::OUTCOME_NOT_AUTHORISED => 'Process ends',
-            default                      => $this->stage() === 'ps' ? 'Principal Secretary authorisation' : 'Managing Director review',
+            default                      => $this->stage() === 'ps' ? 'Principal Secretary signature' : 'Managing Director signature',
         };
     }
 }

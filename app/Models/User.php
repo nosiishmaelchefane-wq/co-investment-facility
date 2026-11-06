@@ -159,4 +159,48 @@ class User extends Authenticatable implements MustVerifyEmail
     {
         return substr(hash_hmac('sha256', $this->getKey().'|'.$this->email.'|'.$this->getAuthPassword(), config('app.key')), 0, 20);
     }
+
+    /* ---------------- Investment Committee secretary ---------------- */
+
+    /** Permission held only by the Committee secretary: records the Committee's decisions at Gate 3 */
+    public const SECRETARY_PERMISSION = 'gate3.decide';
+
+    /** This user is the Committee secretary (gate3.decide given directly, not through a role) */
+    public function isCommitteeSecretary(): bool
+    {
+        return rescue(fn () => $this->hasDirectPermission(self::SECRETARY_PERMISSION), false, report: false);
+    }
+
+    /** The current Committee secretary (active), or null */
+    public static function committeeSecretary(): ?self
+    {
+        return rescue(
+            fn () => static::whereHas('permissions', fn ($q) => $q->where('name', self::SECRETARY_PERMISSION))
+                ->where('status', self::STATUS_ACTIVE)
+                ->orderBy('name')
+                ->first(),
+            null,
+            report: false
+        );
+    }
+
+    /** Make this user the one Committee secretary (the previous secretary loses the role) */
+    public function makeCommitteeSecretary(): void
+    {
+        static::whereKeyNot($this->id)
+            ->whereHas('permissions', fn ($q) => $q->where('name', self::SECRETARY_PERMISSION))
+            ->get()
+            ->each(fn (self $u) => $u->revokePermissionTo(self::SECRETARY_PERMISSION));
+
+        if (! $this->hasDirectPermission(self::SECRETARY_PERMISSION)) {
+            $this->givePermissionTo(self::SECRETARY_PERMISSION);
+        }
+    }
+
+    public function removeCommitteeSecretary(): void
+    {
+        if ($this->hasDirectPermission(self::SECRETARY_PERMISSION)) {
+            $this->revokePermissionTo(self::SECRETARY_PERMISSION);
+        }
+    }
 }

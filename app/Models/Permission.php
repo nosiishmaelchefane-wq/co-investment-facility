@@ -17,8 +17,9 @@ class Permission extends SpatiePermission
         'gate1'       => ['Gate 1 · Eligibility',           'bi-funnel'],
         'gate2'       => ['Gate 2 · Due diligence',         'bi-search'],
         'gate3'       => ['Gate 3 · Committee',             'bi-clipboard2-data'],
-        'gate4'       => ['Gate 4 · Authorisation',         'bi-patch-check'],
-        'gate5'       => ['Gate 5 · Conditions precedent',  'bi-list-check'],
+        'readiness'   => ['Gate 4 · Grant readiness',       'bi-clipboard-check'],
+        'gate4'       => ['Gate 5 · Final authorisation',   'bi-patch-check'],    // permission names keep the old "gate4." prefix
+        'gate5'       => ['Gate 6 · Conditions precedent',  'bi-list-check'],     // permission names keep the old "gate5." prefix
         'funding'     => ['Funding',                        'bi-cash-stack'],
         'portfolio'   => ['Portfolio',                      'bi-graph-up-arrow'],
         'reports'     => ['Reports',                        'bi-bar-chart-line'],

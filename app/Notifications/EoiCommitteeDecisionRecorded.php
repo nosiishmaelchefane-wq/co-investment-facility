@@ -11,7 +11,7 @@ use Illuminate\Support\Facades\Route;
 
 /**
  * G3 · Staff e-mail when the Committee outcome is recorded — to the PMU and the Committee members.
- *   Approve / Conditional → prepare Gate 4 (final authorisation); lists the agreed conditions
+ *   Approve / Conditional → Gate 4 grant readiness review; lists the agreed conditions
  *   Defer                 → the actions to complete before resubmitting to the Committee
  *   Reject                → the transaction is closed
  * Includes the approved figures (Maloti with US$) and the rationale (internal).
@@ -77,7 +77,9 @@ class EoiCommitteeDecisionRecorded extends Notification
         $mail->line('**Next step:** '.$next.'.');
 
         if (in_array($outcome, [CommitteeReview::OUTCOME_APPROVE, CommitteeReview::OUTCOME_CONDITIONAL], true)) {
-            $mail->line('The PMU prepares the authorisation document for signature by the CAFI Managing Director and the MTIBD Principal Secretary (Gate 4).');
+            $mail->line('**Gate 4 · Grant readiness review:** the Grants Management Representative now reviews the grant budget, bank account and documents '
+                .'and prepares the Grant Readiness Memo and Draft Grant Agreement, for approval by the Hub Manager and the PMU Director of Implementation. '
+                .'The Grant Agreement is then signed by the CAFI Managing Director and the MTIBD Principal Secretary (Gate 5).');
         } elseif ($outcome === CommitteeReview::OUTCOME_DEFER) {
             $mail->line('The PMU completes the actions above and resubmits the case to the Committee from the G3 tab.');
         }

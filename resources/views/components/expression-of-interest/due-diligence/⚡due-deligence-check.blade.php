@@ -3,29 +3,32 @@
 use App\Models\DueDiligence;
 use App\Models\DueDiligenceCondition;
 use App\Models\EnterpriseDocument;
+use App\Models\EnterpriseInvestment;
 use App\Models\EnterpriseProfile;
 use App\Models\ExpressionOfInterest;
-use App\Models\User;
 use App\Notifications\EoiDueDiligenceResumed;
 use App\Notifications\EoiGate2Outcome;
 use App\Notifications\EoiReadyForCommittee;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Notification;
-use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Livewire\Attributes\Computed;
 use Livewire\Attributes\Locked;
 use Livewire\Attributes\On;
 use Livewire\Component;
-use Livewire\WithFileUploads;
 
 /*
 | G2 · Due Diligence & Investment Appraisal (§3.3) — simplified
 |   <livewire:expression-of-interest.due-diligence.due-deligence-check :eoi-id="$eoi->id" />
 |
 |   1 Checklist (6 areas: status + findings) · 2 Key figures · 3 Conditions · 4 Summary + memorandum · 5 Outcome
-|   PMU (gate2.assess) edits — saved automatically — and records the outcome. gate2.memo can upload the memorandum.
+|   PMU (gate2.assess) edits — saved automatically — and records the outcome.
+|
+|   Investment Appraisal Memorandum — written here, not uploaded:
+|     5 questions, drafted automatically from the checklist, key figures, conditions and the enterprise profile.
+|     Answers the officer has not edited are redrafted every time the assessment changes; edited answers are kept
+|     ("Redraft" puts the automatic text back). gate2.assess / gate2.memo can edit. Download as PDF.
+|
 |   Proceed → committee · Clarification / Remediation → dd_hold (resume = new round) · Do not progress → not_progressed
 |
 |   E-mails (sent after the change is saved; a failed e-mail never undoes it):
@@ -35,15 +38,12 @@ use Livewire\WithFileUploads;
 */
 new class extends Component
 {
-    use WithFileUploads;
-
     #[Locked] public int $eoiId;
     #[Locked] public ?int $ddId = null;
     #[Locked] public int $round = 1;
 
     public array $form = [];
     public array $conditions = [];   // [id, finding, treatment, owner, status]
-    public $iam = null;
     public ?string $savedAt = null;
 
     public function mount(int $eoiId): void
@@ -69,7 +69,7 @@ new class extends Component
 
     #[Computed] public function profile(): ?EnterpriseProfile
     {
-        return EnterpriseProfile::with('documents')->where('user_id', $this->eoi->user_id)->first();
+        return EnterpriseProfile::with('documents', 'investments')->where('user_id', $this->eoi->user_id)->first();
     }
 
     #[Computed] public function history()
@@ -95,12 +95,17 @@ new class extends Component
 
     #[Computed] public function canEdit(): bool { return $this->isOpenForWork && auth()->user()->can('gate2.assess'); }
 
+    /** Can edit the memorandum answers */
     #[Computed] public function canMemo(): bool
     {
         return $this->isOpenForWork && (auth()->user()->can('gate2.memo') || auth()->user()->can('gate2.assess'));
     }
 
-    #[Computed] public function hasIam(): bool { return (bool) $this->dd?->iam_path; }
+    /** All five memorandum questions answered */
+    public function memoDone(): bool
+    {
+        return DueDiligence::memoComplete($this->form['memo'] ?? []);
+    }
 
     /* ---------------- Submitted information per checklist area ---------------- */
 
@@ -131,48 +136,68 @@ new class extends Component
 
     /** Profile attachments relevant to each checklist area */
     protected const AREA_DOCS = [
-        'enterprise'  => ['registration_cert', 'registration_undertaking', 'foreign_registration', 'shareholders_list', 'key_individuals', 'ids', 'team_resumes', 'tax_clearance'],
+        'enterprise'  => ['registration_cert', 'registration_undertaking', 'foreign_registration', 'business_extract', 'shareholders_list', 'good_standing', 'ids', 'team_resumes', 'tax_clearance'],
         'investor'    => ['commitment', 'cap_table', 'shareholders_list'],
-        'transaction' => ['commitment', 'budget', 'business_plan'],
-        'financial'   => ['financials', 'projections', 'business_plan'],
+        'transaction' => ['commitment', 'cap_table', 'budget', 'business_plan', 'pitch_deck'],
+        'financial'   => ['financials', 'projections', 'business_plan', 'pitch_deck'],
         'esgc'        => ['employee_list'],
-        'risk'        => ['key_individuals', 'ids'],
+        'risk'        => ['ids', 'business_extract', 'team_resumes'],
     ];
 
     /**
      * area => ['rows' => [[label, value, source, sub?, flag?]], 'docs' => [[label, ?EnterpriseDocument, required]]]
-     *   value: string | list | null (not provided) · source: 'EOI' | 'Profile' · flag: null | 'ok' | 'bad'
+     *   value: string | list (strings, or [text, bool] checks) | null (not provided) · source: 'EOI' | 'Profile' · flag: null | 'ok' | 'bad'
      */
     #[Computed] public function evidence(): array
     {
         $eoi  = $this->eoi;
         $p    = $this->profile;
         $P    = EnterpriseProfile::class;
-        $rate = (float) config('cif.usd_to_lsl', 18.00);
+        $rate = max((float) config('cif.usd_to_lsl', 18.00), 0.0001);
 
         $l     = fn ($f, $v) => $v === null || $v === '' ? null : (self::EOI_LABELS[$f][$v] ?? $v);
         $ls    = fn ($f, $vs) => collect($vs ?? [])->map(fn ($v) => self::EOI_LABELS[$f][$v] ?? $v)->values()->all() ?: null;
         $num   = fn ($v) => $v === null || $v === '' ? null : number_format((float) $v);
         $yn    = fn ($v) => $v === null ? null : ($v ? 'Yes' : 'No');
+        $ynp   = fn ($v) => $P::YES_NO_PROGRESS[$v ?? ''] ?? null;
         $usdM  = fn ($usd) => $usd === null ? [null, null] : ['M '.number_format((float) $usd * $rate), 'US$ '.number_format((float) $usd)];
-        $lslM  = fn ($lsl) => $lsl === null ? [null, null] : ['M '.number_format((float) $lsl), 'US$ '.number_format((float) $lsl / max($rate, 0.0001))];
+        $lslM  = fn ($lsl) => $lsl === null ? [null, null] : ['M '.number_format((float) $lsl), 'US$ '.number_format((float) $lsl / $rate)];
 
         $eoiRow = fn ($label, $value, $sub = null, $flag = null) => [$label, $value, 'EOI', $sub, $flag];
         $proRow = fn ($label, $value, $sub = null, $flag = null) => [$label, $value, 'Profile', $sub, $flag];
         $money  = fn ($src, $label, array $m) => [$label, $m[0], $src, $m[1], null];
         $prof   = fn (array $rows) => $p ? $rows : [];
-
-        $investors = collect($p?->investorRows() ?? [])
-            ->map(fn ($r) => $r['name'].(filled($r['country'] ?? null) ? ' ('.$r['country'].')' : '').(filled($r['ticket'] ?? null) ? ' — M '.number_format((float) $r['ticket']) : ''))
+        $people = fn (array $rows, array $parts) => collect($rows)
+            ->map(fn ($r) => trim($r['name'].' — '.collect($parts)->map(fn ($fmt, $k) => filled($r[$k] ?? null) ? sprintf($fmt, $r[$k]) : null)->filter()->implode(' · '), ' —'))
             ->all() ?: null;
+
+        $investorRows = collect($p?->investorRows() ?? []);
+        $investors = $investorRows
+            ->map(fn ($r) => $r['name']
+                .(filled($r['id_number'] ?? null) ? ' · ID/Reg. '.$r['id_number'] : '')
+                .(filled($r['country'] ?? null) ? ' ('.$r['country'].')' : '')
+                .(is_numeric($r['ticket'] ?? null) ? ' — M '.number_format((float) $r['ticket']).' (US$ '.number_format((float) $r['ticket'] / $rate).')' : ' — no amount'))
+            ->all() ?: null;
+        $missingIds = $investorRows->contains(fn ($r) => blank($r['id_number'] ?? null));
+
         $history = collect($p?->investment_history ?? [])
             ->map(fn ($h, $k) => ($P::FUNDING_SOURCES[$k] ?? $k).': '.(filled($h['amount'] ?? null) ? 'M '.number_format((float) $h['amount']) : '—')
                 .(filled($h['date'] ?? null) ? ' (last '.\Illuminate\Support\Carbon::parse($h['date'])->format('M Y').')' : ''))
             ->values()->all() ?: null;
-        $es = $p?->es_checklist
-            ? collect($P::ES_CHECKLIST)->map(fn ($q, $k) => $q[0].' — '.(['yes' => 'Yes', 'no' => 'No', 'na' => 'N/A'][$p->es_checklist[$k] ?? ''] ?? '—'))->values()->all()
+
+        $investorLsl = $p?->investorAmount();
+        $grant       = $p?->grant_requested !== null ? (float) $p->grant_requested : null;
+        $budget      = $p?->budgetTotals() ?? ['private' => 0, 'grant' => 0];
+        $budgetSet   = $p && ($budget['private'] > 0 || $budget['grant'] > 0);
+        $breakdown   = $p?->employeeBreakdownTotal();
+        $shareTotal  = $p?->shareholderTotal() ?? 0;
+        $esFlags     = $p && $p->es_checklist ? $p->esScreening() : [];
+        $esLevel     = ['disqualify' => 'DISQUALIFY', 'dd' => 'Due diligence', 'review' => 'Review', 'clarify' => 'Clarify'];
+        $esAnswers   = $p?->es_checklist
+            ? collect($P::ES_CHECKLIST)->map(fn ($q, $k) => $q[0].' — '.$q[1].' '
+                .($P::ES_ANSWERS[$p->es_checklist[$k] ?? ''] ?? '—')
+                .(filled(((array) $p->es_notes)[$k] ?? null) ? ' · “'.((array) $p->es_notes)[$k].'”' : ''))->values()->all()
             : null;
-        $gaps = $p ? $p->esGaps() : [];
 
         $ev = [
             'enterprise' => [
@@ -181,18 +206,32 @@ new class extends Component
                 $eoiRow('Year commenced', $eoi->year_commenced),
                 ...$prof([
                     $proRow('Registered name', $p?->registered_name, $p?->short_name ? 'Short name: '.$p->short_name : null),
-                    $proRow('Registered at OBFC', $yn($p?->obfc_registered), $p?->registration_no ? 'Registration no. '.$p->registration_no : null, $p?->obfc_registered === false ? 'bad' : null),
+                    $proRow('Registered with the OBFC', $ynp($p?->obfc_status ?? ($p?->obfc_registered === null ? null : ($p->obfc_registered ? 'yes' : 'no'))),
+                        collect([$p?->registration_no ? 'Registration no. '.$p->registration_no : null, $p?->year_registered ? 'registered '.$p->year_registered : null])->filter()->implode(' · ') ?: null,
+                        match ($p?->obfc_status) { 'yes' => 'ok', 'no', 'in_progress' => 'bad', default => null }),
                     $proRow('Type of registration', $p?->legal_form),
-                    $proRow('Registered in another country', $p?->foreign_registered ? ($p->foreign_country ?: 'Yes') : $yn($p?->foreign_registered)),
+                    $proRow('Registered in another country', $p?->foreign_registered ? ($p->foreign_country ?: 'Yes') : $yn($p?->foreign_registered),
+                        $p?->foreign_registered && $p->foreign_registration_no ? 'Registration no. '.$p->foreign_registration_no : null),
+                    $proRow('Foreign-owned', $yn($p?->foreign_owned), $p?->foreign_owned && $p->foreign_owned_pct !== null ? $p->foreign_owned_pct.'% foreign ownership' : null),
+                    $proRow('Primary operations in Lesotho', $yn($p?->primary_ops_lesotho), null, $p?->primary_ops_lesotho === false ? 'bad' : null),
+                    $proRow('Tax file with RSL', $ynp($p?->rsl_tax_file), null, $p?->rsl_tax_file && $p->rsl_tax_file !== 'yes' ? 'bad' : null),
                     $proRow('Address', collect([$p?->address, $p?->city, $p?->district])->filter()->implode(', ') ?: null),
-                    $proRow('Sector · business model', collect([$p?->sector, $P::BUSINESS_MODELS[$p?->business_model ?? ''] ?? null])->filter()->implode(' · ') ?: null),
-                    $proRow('Established · stage', collect([$p?->year_established, $P::STAGES[$p?->company_stage ?? ''] ?? null])->filter()->implode(' · ') ?: null),
+                    $proRow('Sector', $p?->sectorLabel(), $p?->sub_sector ? 'Sub-sector: '.$p->sub_sector : null),
+                    $proRow('Business model(s)', $p?->businessModelLabel()),
+                    $proRow('Operating since · stage', collect([$p?->commencedLabel(), $P::STAGES[$p?->company_stage ?? ''] ?? null])->filter()->implode(' · ') ?: null,
+                        $p?->operatingUnderSixMonths() ? 'Operating for less than 6 months' : null, $p?->operatingUnderSixMonths() ? 'bad' : null),
                     $proRow('Employees', $p?->employees !== null ? $num($p->employees).' current · '.($num($p->employees_prev_year) ?? '—').' previous year' : null,
-                        $p?->employeeBreakdownTotal() !== null ? "FT {$p->ft_male} M / {$p->ft_female} F · PT {$p->pt_male} M / {$p->pt_female} F" : null),
+                        $breakdown !== null ? "FT {$p->ft_male} M / {$p->ft_female} F · PT {$p->pt_male} M / {$p->pt_female} F · Youth ".((int) $p->youth_male + (int) $p->youth_female)
+                            .($p->employees !== null && (int) $p->employees !== $breakdown ? ' — breakdown adds up to '.$breakdown : '') : null,
+                        $breakdown !== null && $p?->employees !== null && (int) $p->employees !== $breakdown ? 'bad' : null),
+                    $proRow('Shareholders', $people($p?->shareholderRows() ?? [], ['id_number' => 'ID %s', 'nationality' => '%s', 'gender' => '%s', 'age' => 'age %s', 'percent' => '%s%%']),
+                        $p?->shareholderRows()
+                            ? 'Total '.rtrim(rtrim(number_format($shareTotal, 2), '0'), '.').'%'.(abs($shareTotal - 100) >= 0.01 ? ' — does not add up to 100%' : '')
+                            : ($p?->document('shareholders_list') ? 'Uploaded as a document (see below)' : null),
+                        $p?->shareholderRows() ? (abs($shareTotal - 100) < 0.01 ? 'ok' : 'bad') : null),
                     $proRow('Shareholding', $p?->ownershipLine()),
-                    $proRow('Ownership & management', $p?->management),
+                    $proRow('Directors & key management', $people($p?->keyPeopleRows() ?? [], ['position' => '%s', 'years' => '%s yrs', 'nationality' => '%s'])),
                     $proRow('Prior CAFI support', $p?->labels($P::PRIOR_SUPPORT, $p?->prior_cafi_support), $p?->prior_support_details),
-                    $proRow('RSL tax file', ['yes' => 'Yes', 'no' => 'No'][$p?->es_checklist['rsl_tax_file'] ?? ''] ?? null, null, ($p?->es_checklist['rsl_tax_file'] ?? null) === 'no' ? 'bad' : null),
                 ]),
             ],
             'investor' => [
@@ -200,23 +239,44 @@ new class extends Component
                 $eoiRow('Investor status', $l('investor_status', $eoi->investor_status), $eoi->investor_status === 'other' ? $eoi->investor_status_other : null),
                 $money('EOI', 'Investor amount', $usdM($eoi->investor_amount_usd)),
                 ...$prof([
-                    $proRow('Investors in the round', $investors),
+                    $proRow('Has a participating investor', $yn($p?->has_investor), null, $p?->has_investor === false ? 'bad' : ($p?->has_investor ? 'ok' : null)),
+                    $proRow('Investors in the round', $investors, $missingIds ? 'Some investors have no ID / passport / registration number' : null, $missingIds ? 'bad' : null),
                     $proRow('Lead investor type', $p?->investor_type),
                     $money('Profile', 'Current investment round', $lslM($p?->round_amount)),
+                    $proRow('Investor minimum (US$ '.number_format($P::minInvestorUsd()).')',
+                        $investorLsl === null ? null : ($P::meetsInvestorMinimum($investorLsl) ? 'Met' : 'Below the minimum'),
+                        $investorLsl === null ? null : 'Investor tickets: M '.number_format($investorLsl).' (US$ '.number_format($investorLsl / $rate).')',
+                        $investorLsl === null ? null : ($P::meetsInvestorMinimum($investorLsl) ? 'ok' : 'bad')),
+                    $proRow('Investment history', $p ? EnterpriseInvestment::summaryLine($p->investments) : null),
+                    $proRow('Investor track record (whole facility)', $p ? (EnterpriseInvestment::trackRecordLines($p) ?: null) : null),
                 ]),
             ],
             'transaction' => [
                 $eoiRow('Evidence available', $ls('investor_evidence', $eoi->investor_evidence)),
-                $eoiRow('Investment type(s)', $ls('investment_types', $eoi->investment_types)),
+                $eoiRow('Investment type(s)', $ls('investment_types', $eoi->investment_types),
+                    in_array('debt', $eoi->investment_types ?? [], true) ? 'Debt is not eligible for co-investment' : null,
+                    in_array('debt', $eoi->investment_types ?? [], true) ? 'bad' : null),
                 $money('EOI', 'Investment required', $usdM($eoi->investment_required_usd)),
                 $eoiRow('Intended use', $ls('use_of_funds', $eoi->use_of_funds), in_array('other', $eoi->use_of_funds ?? [], true) ? $eoi->use_of_funds_other : null),
                 $eoiRow('Planned use', $eoi->use_of_funds_description),
                 ...$prof([
                     $proRow('Financing type', $P::PARTICIPATION[$p?->participation ?? ''] ?? $p?->participation),
                     $proRow('Status of the deal', $P::TRANSACTION_STATUSES[$p?->transaction_status ?? ''] ?? null),
-                    $money('Profile', 'Total project cost', $lslM($p?->project_cost)),
-                    $money('Profile', 'CAFI matching grant ('.$P::grantRatioLabel().')', $lslM($p?->grant_requested)),
+                    $money('Profile', 'CAFI matching grant ('.$P::grantRatioLabel().')', $lslM($grant)),
+                    $proRow('Total project cost', $lslM($p?->project_cost)[0],
+                        ($lslM($p?->project_cost)[1] ?? '').($p?->project_cost !== null && $grant && (float) $p->project_cost < $grant ? ' — less than the CAFI grant' : ''),
+                        $p?->project_cost !== null && $grant ? ((float) $p->project_cost < $grant ? 'bad' : 'ok') : null),
                     $proRow('What the money is for', $p?->investment_purpose),
+                    $proRow('Grant utilisation budget', $budgetSet
+                        ? collect($p->budgetRows())->filter(fn ($r) => (float) ($r['private'] ?? 0) + (float) ($r['grant'] ?? 0) > 0)
+                            ->map(fn ($r) => $r['category'].': investor M '.number_format((float) ($r['private'] ?? 0)).' · CAFI grant M '.number_format((float) ($r['grant'] ?? 0)))
+                            ->values()->all()
+                        : null,
+                        $budgetSet ? 'Total: investor M '.number_format($budget['private']).' · CAFI grant M '.number_format($budget['grant']) : null),
+                    $proRow('Budget matches the funding', $budgetSet ? [
+                        ['Investor column = investor amount (M '.number_format((float) $investorLsl).')', $investorLsl !== null && abs($budget['private'] - $investorLsl) < 1],
+                        ['CAFI grant column = matching grant (M '.number_format((float) $grant).')', $p->budgetMatchesGrant()],
+                    ] : null),
                 ]),
             ],
             'financial' => [
@@ -224,37 +284,57 @@ new class extends Component
                 ...$prof([
                     $money('Profile', 'Annual revenue (past year)', $lslM($p?->annual_revenue)),
                     $proRow('Investment to date', $history),
+                    $proRow('Products & services', $p?->products_services),
+                    $proRow('Customers', $p?->customers),
                     $proRow('Current markets', $p?->labels($P::MARKETS, $p?->markets)),
-                    $proRow('Products, customers & markets', $p?->customers),
                     $proRow('Company summary', $p?->activity),
                 ]),
             ],
             'esgc' => [
                 ...$prof([
                     $proRow('Women / youth owned or managed', $p ? 'Women: '.($yn($p->women_owned_managed) ?? '—').' · Youth: '.($yn($p->youth_owned_managed) ?? '—') : null),
-                    $proRow('E&S checklist', $es, $p?->es_checklist ? (count($gaps) ? count($gaps).' to address — must comply after the grant is awarded' : 'All requirements met') : null,
-                        $p?->es_checklist ? (count($gaps) ? 'bad' : 'ok') : null),
+                    $proRow('Expected new jobs', $num($p?->expected_jobs), $p?->expected_jobs !== null ? 'Women '.(int) $p->expected_jobs_women.' · Youth '.(int) $p->expected_jobs_youth : null),
+                    $proRow('Environmental & social screening', $p?->es_checklist
+                        ? ($esFlags
+                            ? collect($esFlags)->map(fn ($f) => $esLevel[$f[0]].' · '.$P::ES_CHECKLIST[$f[1]][0].' — '.$f[2])->all()
+                            : 'No issue disclosed')
+                        : null,
+                        $p?->es_checklist ? ($p->esDisqualified() ? 'Ground for exclusion disclosed' : ($esFlags ? count($esFlags).' answer(s) to follow up' : 'Confirm at due diligence')) : null,
+                        $p?->es_checklist ? ($p->esDisqualified() ? 'bad' : ($esFlags ? null : 'ok')) : null),
+                    $proRow('Environmental & social answers (all)', $esAnswers),
+                    $proRow('Records system', $P::ES_RECORD_SYSTEMS[$p?->es_records_system ?? ''] ?? $p?->es_records_system),
+                    $proRow('Answers confirmed by the applicant', $p ? ($p->es_confirmed ? 'Confirmed' : 'Not confirmed') : null, null, $p ? ($p->es_confirmed ? 'ok' : 'bad') : null),
                 ]),
             ],
             'risk' => [
                 $eoiRow('EOI declaration', $eoi->declaration_agree ? 'Agreed' : 'Not agreed', null, $eoi->declaration_agree ? 'ok' : 'bad'),
                 ...$prof([
-                    $proRow('E&S gaps', $gaps ? collect($gaps)->map(fn ($k) => $P::ES_CHECKLIST[$k][0])->all() : 'None', null, $gaps ? 'bad' : 'ok'),
-                    $proRow('Prior CAFI grant support', $p?->labels($P::PRIOR_SUPPORT, $p?->prior_cafi_support), 'Check for double financing', null),
+                    $proRow('Ownership or management dispute', $yn($p?->ownership_dispute), $p?->ownership_dispute ? $p->ownership_dispute_details : null,
+                        $p?->ownership_dispute ? 'bad' : ($p?->ownership_dispute === false ? 'ok' : null)),
+                    $proRow('Environmental & social flags', $esFlags ? collect($esFlags)->map(fn ($f) => $esLevel[$f[0]].' · '.$f[2])->all() : ($p?->es_checklist ? 'None' : null),
+                        null, $p?->esDisqualified() ? 'bad' : ($p?->es_checklist && ! $esFlags ? 'ok' : null)),
+                    $proRow('Prior CAFI grant support', $p?->labels($P::PRIOR_SUPPORT, $p?->prior_cafi_support), 'Check for double financing'),
                     $proRow('Profile declaration', $p?->declaration_agreed ? 'Signed' : 'Not signed',
                         $p?->declared_name ? $p->declared_name.($p->declared_on ? ' · '.$p->declared_on->format('d M Y') : '') : null, $p?->declaration_agreed ? 'ok' : 'bad'),
                 ]),
             ],
         ];
 
-        // Only documents that apply to this applicant (registration ones depend on their answers)
+        // Only documents that apply to this applicant. Business plan / pitch deck: one of the two is enough.
         $required   = $p?->requiredDocumentTypes() ?? array_keys(array_filter(EnterpriseDocument::TYPES, fn ($t) => $t[3] === true));
-        $applicable = fn (string $t) => isset(EnterpriseDocument::TYPES[$t]) && (is_bool(EnterpriseDocument::TYPES[$t][3]) || in_array($t, $required, true));
+        $applicable = fn (string $t) => isset(EnterpriseDocument::TYPES[$t])
+            && (is_bool(EnterpriseDocument::TYPES[$t][3]) || in_array($t, $required, true) || in_array($t, EnterpriseDocument::PLAN_OR_DECK, true));
+        $planShown  = collect(EnterpriseDocument::PLAN_OR_DECK)->first(fn ($t) => (bool) $p?->document($t)) ?? EnterpriseDocument::PLAN_OR_DECK[0];
 
         return collect($ev)->map(fn ($rows, $area) => [
             'rows' => $rows,
             'docs' => collect(self::AREA_DOCS[$area] ?? [])->filter($applicable)
-                ->map(fn ($t) => [EnterpriseDocument::TYPES[$t][0], $p?->document($t), in_array($t, $required, true)])
+                ->reject(fn ($t) => in_array($t, EnterpriseDocument::PLAN_OR_DECK, true) && $t !== $planShown)
+                ->map(fn ($t) => [
+                    $p?->document($t) ? EnterpriseDocument::TYPES[$t][0] : EnterpriseDocument::missingLabel($t),
+                    $p?->document($t),
+                    in_array($t, $required, true) || in_array($t, EnterpriseDocument::PLAN_OR_DECK, true),
+                ])
                 ->values()->all(),
         ])->all();
     }
@@ -265,7 +345,7 @@ new class extends Component
         $p = $this->profile; $eoi = $this->eoi; $rate = (float) config('cif.usd_to_lsl', 18.00);
 
         return [
-            'private' => $p?->investor_contribution ?? ($eoi->investor_amount_usd !== null ? (float) $eoi->investor_amount_usd * $rate : null),
+            'private' => $p?->investorAmount() ?? ($eoi->investor_amount_usd !== null ? (float) $eoi->investor_amount_usd * $rate : null),
             'grant'   => $p?->grant_requested,
         ];
     }
@@ -289,9 +369,16 @@ new class extends Component
             $f[$n] = $f[$n] !== null && $f[$n] !== '' ? (float) $f[$n] : null;
         }
         $f['assessed_on'] = $f['assessed_on'] ?: now()->toDateString();
+        $f['memo']        = DueDiligence::memoRows($f['memo'] ?? []);
+
+        // Open assessment: bring the automatic answers up to date with the profile (edited answers are kept)
+        if (! $dd?->isDecided()) {
+            $f['memo'] = DueDiligence::refreshMemo($f, $this->conditions, $this->eoi, $this->profile);
+        }
+
         $this->form = $f;
 
-        unset($this->dd, $this->history, $this->hasIam);
+        unset($this->dd, $this->history);
     }
 
     /* ---------------- Autosave ---------------- */
@@ -301,6 +388,22 @@ new class extends Component
         if (! Str::startsWith($name, ['form', 'conditions'])) {
             return;
         }
+
+        // Memorandum answers (gate2.memo can edit these too). A typed answer is marked "edited" and is no longer redrafted;
+        // clearing an answer hands it back to the automatic draft.
+        if (Str::startsWith($name, 'form.memo.')) {
+            if (! $this->canMemo) {
+                $this->load();
+                return;
+            }
+            $key = explode('.', $name)[2] ?? null;
+            if (isset(DueDiligence::MEMO_QUESTIONS[$key])) {
+                $this->form['memo'][$key]['edited'] = trim((string) ($this->form['memo'][$key]['text'] ?? '')) !== '';
+            }
+            $this->persist();
+            return;
+        }
+
         if (! $this->canEdit) {
             $this->load();
             return;
@@ -325,26 +428,16 @@ new class extends Component
 
     /* ---------------- Memorandum ---------------- */
 
-    public function updatedIam(): void
+    /** Put the automatic text back for one question (or all five), replacing any edits */
+    public function redraftMemo(?string $key = null): void
     {
         abort_unless($this->canMemo, 403);
-        $this->validate(['iam' => ['required', 'file', 'mimes:pdf,doc,docx', 'max:20480']], [], ['iam' => 'memorandum']);
+        abort_if($key !== null && ! isset(DueDiligence::MEMO_QUESTIONS[$key]), 404);
 
-        $dd = $this->persist();
-        if ($dd->iam_path) {
-            Storage::disk('local')->delete($dd->iam_path);
-        }
-        $dd->update([
-            'iam_path'        => $this->iam->store("due-diligence/{$dd->id}", 'local'),
-            'iam_name'        => $this->iam->getClientOriginalName(),
-            'iam_size'        => $this->iam->getSize(),
-            'iam_uploaded_by' => auth()->id(),
-            'iam_uploaded_at' => now(),
-        ]);
+        $this->form['memo'] = DueDiligence::refreshMemo($this->form, $this->conditions, $this->eoi, $this->profile, $key, force: true);
+        $this->persist();
 
-        $this->reset('iam');
-        unset($this->dd, $this->hasIam);
-        $this->dispatch('notify', type: 'success', message: 'Memorandum uploaded.');
+        $this->dispatch('notify', type: 'success', message: $key ? 'Answer redrafted from the assessment.' : 'Memorandum redrafted from the assessment.');
     }
 
     /* ---------------- Outcome ---------------- */
@@ -361,7 +454,7 @@ new class extends Component
 
         $outcome = $this->form['outcome'];
 
-        if ($outcome === DueDiligence::OUTCOME_PROCEED && DueDiligence::proceedBlockers($this->form, $this->conditions, $this->hasIam)) {
+        if ($outcome === DueDiligence::OUTCOME_PROCEED && DueDiligence::proceedBlockers($this->form, $this->conditions, $this->memoDone())) {
             $this->addError('form.outcome', 'Not ready to proceed — see the list above.');
             return;
         }
@@ -388,7 +481,7 @@ new class extends Component
             message: 'Gate 2 outcome recorded: '.DueDiligence::OUTCOMES[$outcome][0].'. '.implode(' ', array_filter($notes)));
     }
 
-    /** On hold → new round, everything carried over */
+    /** On hold → new round, everything carried over (memorandum included) */
     public function resumeAssessment(): void
     {
         abort_unless(! $this->isApplicant && auth()->user()->can('gate2.assess')
@@ -419,7 +512,7 @@ new class extends Component
         $this->load();
         unset($this->isOpenForWork, $this->canEdit, $this->canMemo);
         $this->dispatch('gate-decided', gate: 'g2', decision: null);
-        $this->dispatch('notify', type: 'success', message: "Assessment resumed — round {$this->round}. Upload an updated memorandum. {$note}");
+        $this->dispatch('notify', type: 'success', message: "Assessment resumed — round {$this->round}. Review the memorandum before recording the outcome. {$note}");
     }
 
     /* ---------------- E-mails ---------------- */
@@ -491,6 +584,9 @@ new class extends Component
 
     protected function persist(bool $updateEoi = true): DueDiligence
     {
+        // Keep the automatic memorandum answers in step with the assessment (edited answers are left alone)
+        $this->form['memo'] = DueDiligence::refreshMemo($this->form, $this->conditions, $this->eoi, $this->profile);
+
         $data = collect(DueDiligence::FORM_COLUMNS)->mapWithKeys(fn ($c) => [$c => $this->form[$c] ?? null])->all();
         foreach (['private_amount', 'grant_amount', 'stage', 'instrument', 'esgc_category', 'outcome', 'assessed_on'] as $c) {
             $data[$c] = $data[$c] === '' ? null : $data[$c];
@@ -575,10 +671,12 @@ new class extends Component
     $canEdit  = $this->canEdit;
     $canMemo  = $this->canMemo;
     $decided  = (bool) $dd?->isDecided();
-    $hasIam   = $this->hasIam;
+    $memoDone = $this->memoDone();
+    $memo     = $DD::memoRows($form['memo'] ?? []);
+    $answered = collect($memo)->filter(fn ($r) => filled(trim($r['text'])))->count();
     $v        = $DD::validated($form);
-    $progress = $DD::progress($form, $hasIam);
-    $blockers = $this->isApplicant ? [] : $DD::proceedBlockers($form, $conditions, $hasIam);
+    $progress = $DD::progress($form, $memoDone);
+    $blockers = $this->isApplicant ? [] : $DD::proceedBlockers($form, $conditions, $memoDone);
     $req      = $this->isApplicant ? [] : $this->requested;
     $evidence = $this->isApplicant || ! $this->gateOpen ? [] : $this->evidence;
     $rate     = (float) config('cif.usd_to_lsl', 18.00);
@@ -654,7 +752,7 @@ new class extends Component
             <span><i class="bi bi-building me-1"></i>{{ $eoi->business_name }} <span class="chip ms-1">{{ $eoi->reference }}</span></span>
             <span><i class="bi bi-person me-1"></i>{{ $dd?->assessor?->name ?? auth()->user()->name }}</span>
             @if ($dd?->started_on) <span><i class="bi bi-calendar me-1"></i>Started {{ $dd->started_on->format('d M Y') }}</span> @endif
-            @if ($canEdit)
+            @if ($canEdit || $canMemo)
                 <span class="ms-auto"><i class="bi bi-cloud-check me-1"></i>Saved automatically @if ($savedAt) · {{ $savedAt }} @endif
                     <span wire:loading class="spinner-border spinner-border-sm ms-1"></span></span>
             @elseif (! $decided)
@@ -669,7 +767,7 @@ new class extends Component
             <span class="section-no">1</span>
             <div class="me-auto">
                 <h5>Assessment checklist</h5>
-                <div class="small text-muted">Proportionate and risk-based — check what matters, record what you found.</div>
+                <div class="small text-muted">Proportionate and risk-based — check what matters, record what you found. Your findings are used to draft the memorandum.</div>
             </div>
             @canany(['eoi.view-all', 'users.manage'])
                 <a href="{{ route('profile.index', $eoi->user_id) }}" target="_blank" class="small text-decoration-none"><i class="bi bi-box-arrow-up-right me-1"></i>Enterprise profile &amp; documents</a>
@@ -699,12 +797,14 @@ new class extends Component
                     $ev      = $evidence[$key] ?? ['rows' => [], 'docs' => []];
                     $missing = collect($ev['rows'])->filter(fn ($r) => blank($r[1]))->count()
                              + collect($ev['docs'])->filter(fn ($d) => ! $d[1] && $d[2])->count();
+                    $flagged = collect($ev['rows'])->filter(fn ($r) => ($r[4] ?? null) === 'bad')->count();
                 @endphp
                 @if ($ev['rows'] || $ev['docs'])
                     <details class="evidence mt-2">
                         <summary>
                             <i class="bi bi-file-earmark-text me-1"></i> Submitted information &amp; documents
                             @if ($missing) <span class="pill pill-warn ms-2">{{ $missing }} not provided</span> @endif
+                            @if ($flagged) <span class="pill pill-danger ms-1">{{ $flagged }} flagged</span> @endif
                         </summary>
                         <dl class="evidence-grid">
                             @foreach ($ev['rows'] as [$rLabel, $rValue, $rSource, $rSub, $rFlag])
@@ -713,9 +813,17 @@ new class extends Component
                                     @if (blank($rValue))
                                         <span class="text-muted fst-italic">Not provided</span>
                                     @elseif (is_array($rValue))
-                                        <ul class="evidence-list">@foreach ($rValue as $item)<li>{{ $item }}</li>@endforeach</ul>
+                                        <ul class="evidence-list">
+                                            @foreach ($rValue as $item)
+                                                @if (is_array($item))
+                                                    <li class="{{ $item[1] ? 'is-yes' : 'is-no' }}"><i class="bi {{ $item[1] ? 'bi-check-circle-fill text-success' : 'bi-x-circle text-danger' }}"></i> {{ $item[0] }}</li>
+                                                @else
+                                                    <li>{{ $item }}</li>
+                                                @endif
+                                            @endforeach
+                                        </ul>
                                     @else
-                                        <span class="evidence-value">{{ $rValue }}</span>
+                                        <span class="evidence-value {{ $rFlag === 'bad' ? 'text-danger' : '' }}">{{ $rValue }}</span>
                                     @endif
                                     @if ($rSub)
                                         <div class="small {{ ['ok' => 'text-success', 'bad' => 'text-danger'][$rFlag] ?? 'text-muted' }}">{{ $rSub }}</div>
@@ -846,9 +954,14 @@ new class extends Component
         <div class="section-card-head">
             <span class="section-no">4</span>
             <div class="me-auto">
-                <h5>Summary for the Investment Committee</h5>
-                <div class="small text-muted">With the figures above, this forms the Transaction Summary Sheet.</div>
+                <h5>Summary &amp; Investment Appraisal Memorandum</h5>
+                <div class="small text-muted">With the figures above, this forms the Transaction Summary Sheet and the memorandum for the Investment Committee.</div>
             </div>
+            @if ($dd)
+                <a href="{{ route('due-diligence.memorandum', $dd) }}" class="btn btn-sm btn-outline-secondary" title="Download the memorandum as PDF">
+                    <i class="bi bi-file-earmark-pdf me-1"></i> Download PDF
+                </a>
+            @endif
         </div>
         <div class="row g-3">
             <div class="col-12">
@@ -865,34 +978,60 @@ new class extends Component
             </div>
         </div>
 
-        <label class="form-label small fw-semibold mt-3">Investment Appraisal Memorandum</label>
+        {{-- Investment Appraisal Memorandum — the five appraisal questions --}}
+        <div class="d-flex flex-wrap align-items-center gap-2 mt-4 mb-2">
+            <div class="me-auto">
+                <div class="fw-semibold text-navy">Investment Appraisal Memorandum</div>
+                <div class="small text-muted">
+                    Drafted automatically from your checklist findings, key figures, conditions and the enterprise profile — it updates as you assess.
+                    Change any answer as needed; edited answers are kept.
+                </div>
+            </div>
+            <span class="pill {{ $memoDone ? 'pill-ok' : 'pill-warn' }}">{{ $answered }} / {{ count($DD::MEMO_QUESTIONS) }} answered</span>
+            @if ($canMemo)
+                <button type="button" class="btn btn-sm btn-outline-secondary" wire:click="redraftMemo" wire:loading.attr="disabled" wire:target="redraftMemo"
+                        wire:confirm="Replace all five answers — including your edits — with the automatic draft?">
+                    <i class="bi bi-arrow-repeat me-1"></i> Redraft all
+                </button>
+            @endif
+        </div>
+
+        @foreach ($DD::MEMO_QUESTIONS as $mk => [$mTitle, $mQuestion])
+            @php $row = $memo[$mk]; @endphp
+            <div class="border rounded-3 p-3 mb-2" wire:key="memo-{{ $mk }}">
+                <div class="d-flex align-items-start gap-2 mb-2">
+                    <span class="section-no flex-shrink-0">{{ $loop->iteration }}</span>
+                    <div class="flex-grow-1">
+                        <div class="fw-semibold text-navy">{{ $mTitle }}</div>
+                        <div class="small text-muted">{{ $mQuestion }}</div>
+                    </div>
+                    @if ($row['edited'])
+                        <span class="pill pill-ok" title="Written or changed by the officer — not redrafted automatically"><i class="bi bi-pencil"></i> Edited</span>
+                        @if ($canMemo)
+                            <button type="button" class="btn btn-icon" wire:click="redraftMemo('{{ $mk }}')" title="Replace with the automatic draft"
+                                    wire:confirm="Replace this answer with the automatic draft? Your changes will be lost.">
+                                <i class="bi bi-arrow-counterclockwise"></i>
+                            </button>
+                        @endif
+                    @else
+                        <span class="pill pill-muted" title="Drafted from the assessment — updates automatically until you edit it"><i class="bi bi-magic"></i> Auto-drafted</span>
+                    @endif
+                </div>
+                <textarea rows="5" class="form-control form-control-sm" wire:model.blur="form.memo.{{ $mk }}.text" @disabled(! $canMemo)
+                          placeholder="Answer for the Investment Committee"></textarea>
+            </div>
+        @endforeach
+
         @if ($dd?->iam_path)
-            <div class="file-row mb-0">
-                <span class="file-row-icon"><i class="bi bi-file-earmark-text"></i></span>
+            <div class="file-row mt-3 mb-0">
+                <span class="file-row-icon"><i class="bi bi-paperclip"></i></span>
                 <div class="flex-grow-1 small">
-                    <div class="fw-semibold text-navy">{{ $dd->iam_name }}</div>
+                    <div class="fw-semibold text-navy">Earlier uploaded memorandum · {{ $dd->iam_name }}</div>
                     <div class="text-muted">{{ $dd->iamUploader?->name }} · {{ $dd->iam_uploaded_at?->format('d M Y H:i') }}</div>
                 </div>
-                <a href="{{ route('due-diligence.memorandum', $dd) }}" class="btn btn-icon" title="Download"><i class="bi bi-download"></i></a>
-                @if ($canMemo)
-                    <label class="btn btn-sm btn-outline-secondary mb-0"><i class="bi bi-upload me-1"></i> Replace
-                        <input type="file" class="d-none" wire:model="iam" accept=".pdf,.doc,.docx"></label>
-                @endif
+                <a href="{{ route('due-diligence.memorandum', [$dd, 'file' => 1]) }}" class="btn btn-icon" title="Download"><i class="bi bi-download"></i></a>
             </div>
-        @elseif ($canMemo)
-            <label class="file-row upload-drop mb-0">
-                <span class="file-row-icon"><i class="bi bi-cloud-arrow-up"></i></span>
-                <div class="flex-grow-1 small">
-                    <div class="fw-semibold text-navy" wire:loading.remove wire:target="iam">Upload memorandum</div>
-                    <div class="fw-semibold text-navy" wire:loading wire:target="iam">Uploading…</div>
-                    <div class="text-muted">PDF or Word, up to 20 MB</div>
-                </div>
-                <input type="file" class="d-none" wire:model="iam" accept=".pdf,.doc,.docx">
-            </label>
-        @else
-            <div class="small text-muted">Not uploaded yet.</div>
         @endif
-        @error('iam') <div class="text-danger small mt-1">{{ $message }}</div> @enderror
     </section>
 
     {{-- 5 · Outcome --}}
@@ -949,7 +1088,7 @@ new class extends Component
         @if ($canEdit)
             <div class="d-flex mt-4 pt-3 border-top">
                 <button type="button" class="btn btn-brand ms-auto" wire:click="recordOutcome" wire:loading.attr="disabled" wire:target="recordOutcome"
-                        wire:confirm="Record the Gate 2 outcome? The assessment is locked afterwards, and the applicant will be e-mailed (and the Investment Committee too, if it proceeds).">
+                        wire:confirm="Record the Gate 2 outcome? The assessment and memorandum are locked afterwards, and the applicant will be e-mailed (and the Investment Committee too, if it proceeds).">
                     <span wire:loading.remove wire:target="recordOutcome"><i class="bi bi-send me-1"></i> Record outcome</span>
                     <span wire:loading wire:target="recordOutcome"><span class="spinner-border spinner-border-sm me-1"></span> Recording…</span>
                 </button>
@@ -977,6 +1116,7 @@ new class extends Component
                         <span class="text-muted ms-1">{{ $h->decided_at->format('d M Y') }} · {{ $h->decider?->name }}</span>
                         @if ($h->conclusion) <div class="text-muted mt-1">{{ $h->conclusion }}</div> @endif
                     </div>
+                    <a href="{{ route('due-diligence.memorandum', $h) }}" class="btn btn-icon" title="Memorandum (PDF) — round {{ $h->round }}"><i class="bi bi-file-earmark-pdf"></i></a>
                 </div>
             @endforeach
         </section>
