@@ -199,17 +199,6 @@ new class extends Component
         $this->form['shareholder_list'] = array_values($this->form['shareholder_list']) ?: [EnterpriseProfile::BLANK_SHAREHOLDER];
     }
 
-    public function addInvestor(): void
-    {
-        $this->form['round_investors'][] = ['name' => '', 'id_number' => '', 'country' => '', 'ticket' => ''];
-    }
-
-    public function removeInvestor(int $i): void
-    {
-        unset($this->form['round_investors'][$i]);
-        $this->form['round_investors'] = array_values($this->form['round_investors']) ?: [['name' => '', 'id_number' => '', 'country' => '', 'ticket' => '']];
-    }
-
     public function save(): void
     {
         abort_if($this->readOnly || ! $this->editing, 403);
@@ -1583,8 +1572,18 @@ new class extends Component
                                 @endphp
 
                                 @if (($form['has_investor'] ?? '') === 'no')
-                                    <div class="col-12"><div class="callout callout-warning small mb-0">
-                                        <i class="bi bi-exclamation-triangle me-1"></i> The Co-Investment Facility matches money from a private investor, so a CAFI grant can only be awarded once you have an investor. You can save your profile now and add your investor later.
+                                    <div class="col-12"><div class="callout small mb-0">
+                                        <div class="fw-semibold text-navy mb-1"><i class="bi bi-people me-1"></i> Get matched with an investor through LEHSFF</div>
+                                        <p class="mb-2">The Co-Investment Facility matches money from a private investor, so a CAFI grant can only be awarded once you have an investor. If you don't have one yet, we recommend LEHSFF matchmaking on the
+                                            <a href="https://collaboration.lehsff.org.ls/" target="_blank" rel="noopener">LEHSFF Collaboration Platform <i class="bi bi-box-arrow-up-right"></i></a>.</p>
+                                        <div class="fw-semibold mb-1">How to get matched</div>
+                                        <ol class="mb-2 ps-3">
+                                            <li>Go to <a href="https://collaboration.lehsff.org.ls/" target="_blank" rel="noopener">collaboration.lehsff.org.ls</a> and <strong>sign up as an Entrepreneur</strong> (or log in if you already have an account).</li>
+                                            <li><strong>Fill in all of your entrepreneur profile details</strong> — your business and contact details, sector, stage of the business, products or services, the investment you are looking for and what it will be used for, and your team.</li>
+                                            <li>Upload the supporting documents the profile asks for, check that every section is complete, then save your profile.</li>
+                                            <li>Once your profile is complete, <strong>the CAFI team will be notified</strong>. They will review your profile and match you with suitable investors on the platform.</li>
+                                        </ol>
+                                        <div class="text-muted"><i class="bi bi-info-circle me-1"></i> Only complete profiles can be matched, so make sure no section is left empty. You can save this profile now.</div>
                                     </div></div>
                                 @endif
 
@@ -1606,10 +1605,8 @@ new class extends Component
                                                     <input type="number" min="0" step="1000" class="form-control @error('form.round_investors.'.$i.'.ticket') is-invalid @enderror" wire:model.live.debounce.500ms="form.round_investors.{{ $i }}.ticket" placeholder="Ticket size"></div>
                                                     <div class="form-text">{{ $usd($row['ticket'] ?? null) }}</div>
                                                     @error('form.round_investors.'.$i.'.ticket') <div class="text-danger small">{{ $message }}</div> @enderror</div>
-                                                <div class="col-md-1 text-end"><button type="button" class="btn btn-icon btn-icon-danger" title="Remove" wire:click="removeInvestor({{ $i }})"><i class="bi bi-trash"></i></button></div>
                                             </div>
                                         @endforeach
-                                        <button type="button" class="btn btn-sm btn-outline-secondary" wire:click="addInvestor"><i class="bi bi-plus-lg me-1"></i> Add investor</button>
                                         @error('form.round_investors') <div class="text-danger small mt-1">{{ $message }}</div> @enderror</div>
 
                                     <div class="col-md-6"><label class="form-label small fw-semibold">Investment round financing type {!! $tip('participation') !!} <span class="req">*</span></label>
@@ -1862,7 +1859,16 @@ new class extends Component
                                 <div><dt>Do you have an investor? {!! $tip('has_investor') !!}</dt><dd>{{ $yn($p->has_investor ?? ($p->investorRows() ? true : null)) }}</dd></div>
                             </div>
                             @if ($p->has_investor === false)
-                                <div class="callout callout-warning small mb-3"><i class="bi bi-exclamation-triangle me-1"></i> No investor yet — a CAFI grant can only be awarded once there is a private investor.</div>
+                                <div class="callout small mb-3">
+                                    <div class="fw-semibold text-navy mb-1"><i class="bi bi-people me-1"></i> No investor yet — LEHSFF matchmaking recommended</div>
+                                    A CAFI grant can only be awarded once there is a private investor.
+                                    @if ($canEdit)
+                                        Sign up as an Entrepreneur on the <a href="https://collaboration.lehsff.org.ls/" target="_blank" rel="noopener">LEHSFF Collaboration Platform <i class="bi bi-box-arrow-up-right"></i></a>
+                                        and fill in all of your profile details — the CAFI team will be notified and will match you with suitable investors.
+                                    @else
+                                        The entrepreneur has been referred to LEHSFF matchmaking on the <a href="https://collaboration.lehsff.org.ls/" target="_blank" rel="noopener">Collaboration Platform</a>.
+                                    @endif
+                                </div>
                             @endif
                             <dt class="detail-label mb-2">Current investment round {!! $tip('round_amount') !!}</dt>
                             <div class="row g-2 mb-3">
