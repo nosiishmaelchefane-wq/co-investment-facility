@@ -12,15 +12,25 @@ use Livewire\Component;
     $eoi     = $this->eoi;
     $isOwner = $this->isOwner;
 
+    /* ---------- Money: stored in US$, shown in US$ with Maloti underneath ---------- */
+    $rate      = max((float) config('cif.usd_to_lsl', 18.00), 0.0001);
+    $usd       = fn ($amount) => 'US$ '.number_format((float) $amount);
+    $lsl       = fn ($usdAmount) => 'M '.number_format((float) $usdAmount * $rate);
+    $bandUsd   = fn (int $maloti) => 'US$ '.number_format(round($maloti / $rate / 1000) * 1000);
+
     /* ---------- Labels (same keys as the apply form) ---------- */
     $labels = [
         'legal_status' => [
             'registered_operating' => 'Registered and operating in Lesotho', 'registered_not_operating' => 'Registered, operations not yet established',
             'registration_in_progress' => 'Registration in progress', 'not_registered' => 'Not registered',
         ],
+        // Bands are stored in Maloti; US$ is shown first
         'annual_turnover' => [
-            'below_500k' => 'Below M500,000', '500k_2m' => 'M500,000 – M2 million', '2m_5m' => 'M2 – M5 million',
-            '5m_10m' => 'M5 – M10 million', 'above_10m' => 'Above M10 million',
+            'below_500k' => 'Below '.$bandUsd(500000).' (M500,000)',
+            '500k_2m'    => $bandUsd(500000).' – '.$bandUsd(2000000).' (M500,000 – M2 million)',
+            '2m_5m'      => $bandUsd(2000000).' – '.$bandUsd(5000000).' (M2 – M5 million)',
+            '5m_10m'     => $bandUsd(5000000).' – '.$bandUsd(10000000).' (M5 – M10 million)',
+            'above_10m'  => 'Above '.$bandUsd(10000000).' (M10 million)',
         ],
         'investment_types' => ['equity' => 'Equity', 'quasi_equity' => 'Quasi-equity', 'debt' => 'Debt'],
         'use_of_funds' => [
@@ -83,10 +93,6 @@ use Livewire\Component;
         default                     => 0,
     };
 
-    /* ---------- Money: stored in US$, shown in Maloti with US$ underneath ---------- */
-    $rate      = (float) config('cif.usd_to_lsl', 18.00);
-    $lsl       = fn ($usd) => 'M '.number_format((float) $usd * $rate);
-    $usd       = fn ($amount) => 'US$ '.number_format((float) $amount);
     $required  = (float) ($eoi->investment_required_usd ?? 0);
     $committed = (float) ($eoi->investor_amount_usd ?? 0);
     $coverage  = $required > 0 ? min(100, round($committed / $required * 100)) : 0;
@@ -277,8 +283,8 @@ use Livewire\Component;
                 <div>
                     <div class="stat-label">Investment required</div>
                     <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($required): ?>
-                        <div class="stat-value sm"><?php echo e($lsl($required)); ?></div>
-                        <div class="small text-muted">≈ <?php echo e($usd($required)); ?></div>
+                        <div class="stat-value sm"><?php echo e($usd($required)); ?></div>
+                        <div class="small text-muted">≈ <?php echo e($lsl($required)); ?></div>
                     <?php else: ?>
                         <div class="stat-value sm">—</div>
                     <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
@@ -291,8 +297,8 @@ use Livewire\Component;
                 <div>
                     <div class="stat-label">Investor commitment</div>
                     <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($committed): ?>
-                        <div class="stat-value sm"><?php echo e($lsl($committed)); ?></div>
-                        <div class="small text-muted">≈ <?php echo e($usd($committed)); ?></div>
+                        <div class="stat-value sm"><?php echo e($usd($committed)); ?></div>
+                        <div class="small text-muted">≈ <?php echo e($lsl($committed)); ?></div>
                     <?php else: ?>
                         <div class="stat-value sm">—</div>
                     <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
@@ -305,8 +311,8 @@ use Livewire\Component;
                 <div>
                     <div class="stat-label">Funding gap</div>
                     <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($required): ?>
-                        <div class="stat-value sm"><?php echo e($lsl($gap)); ?></div>
-                        <div class="small text-muted">≈ <?php echo e($usd($gap)); ?></div>
+                        <div class="stat-value sm"><?php echo e($usd($gap)); ?></div>
+                        <div class="small text-muted">≈ <?php echo e($lsl($gap)); ?></div>
                     <?php else: ?>
                         <div class="stat-value sm">—</div>
                     <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
@@ -395,8 +401,8 @@ use Livewire\Component;
                     <div><dt>Total investment required</dt>
                         <dd>
                             <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($required): ?>
-                                <span class="d-block fs-5 fw-bold text-brand"><?php echo e($lsl($required)); ?></span>
-                                <span class="small text-muted">≈ <?php echo e($usd($required)); ?></span>
+                                <span class="d-block fs-5 fw-bold text-brand"><?php echo e($usd($required)); ?></span>
+                                <span class="small text-muted">≈ <?php echo e($lsl($required)); ?></span>
                             <?php else: ?> — <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
                         </dd>
                     </div>
@@ -454,7 +460,7 @@ use Livewire\Component;
                     <div><dt>Status</dt><dd><?php echo e($label('investor_status', $eoi->investor_status)); ?><?php echo e($eoi->investor_status === 'other' && $eoi->investor_status_other ? ': '.$eoi->investor_status_other : ''); ?></dd></div>
                     <div><dt>Investor</dt><dd><?php echo e($eoi->investor_name ?: '—'); ?></dd></div>
                     <div><dt>Amount indicated / committed</dt>
-                        <dd><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($committed): ?> <?php echo e($lsl($committed)); ?> <span class="small text-muted">(≈ <?php echo e($usd($committed)); ?>)</span> <?php else: ?> — <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?></dd>
+                        <dd><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($committed): ?> <?php echo e($usd($committed)); ?> <span class="small text-muted">(≈ <?php echo e($lsl($committed)); ?>)</span> <?php else: ?> — <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?></dd>
                     </div>
                     <div><dt>Evidence</dt>
                         <dd class="d-flex flex-wrap gap-1">
@@ -475,8 +481,8 @@ use Livewire\Component;
                             <div class="progress-bar bg-accent" style="width: <?php echo e($coverage); ?>%;"></div>
                         </div>
                         <div class="d-flex justify-content-between flex-wrap gap-2 small text-muted mt-1">
-                            <span>Investor: <?php echo e($lsl($committed)); ?> (≈ <?php echo e($usd($committed)); ?>)</span>
-                            <span>Gap: <?php echo e($lsl($gap)); ?> (≈ <?php echo e($usd($gap)); ?>)</span>
+                            <span>Investor: <?php echo e($usd($committed)); ?> (≈ <?php echo e($lsl($committed)); ?>)</span>
+                            <span>Gap: <?php echo e($usd($gap)); ?> (≈ <?php echo e($lsl($gap)); ?>)</span>
                         </div>
                     </div>
                 <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>

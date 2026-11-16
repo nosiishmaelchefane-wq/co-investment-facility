@@ -61,7 +61,6 @@
                         <button class="nav-link" data-bs-toggle="pill" data-bs-target="#tab-password" type="button" role="tab"><i class="bi bi-key"></i> Password</button>
                         <button class="nav-link" data-bs-toggle="pill" data-bs-target="#tab-security" type="button" role="tab">
                             <i class="bi bi-shield-lock"></i> <span class="me-auto">Sign-in security</span>
-                            <span class="badge rounded-pill {{ $tfOn ? 'text-bg-success' : 'text-bg-warning' }}">{{ $tfOn ? 'On' : 'Off' }}</span>
                         </button>
                         <button class="nav-link" data-bs-toggle="pill" data-bs-target="#tab-sessions" type="button" role="tab"><i class="bi bi-laptop"></i> Signed-in devices</button>
                     </nav>

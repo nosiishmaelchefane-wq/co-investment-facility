@@ -1,9 +1,12 @@
 <?php
 
 use App\Models\CommitteeReview;
+use App\Models\EnterpriseDocument;
 use App\Models\EnterpriseProfile;
 use App\Models\ExpressionOfInterest;
 use App\Models\GrantReadiness;
+use App\Notifications\EoiBankDetailsRequested;
+use App\Notifications\EoiBankDetailsSubmitted;
 use App\Notifications\EoiGrantReadinessUpdate;
 use App\Support\NotifyRecipients;
 use Illuminate\Support\Facades\DB;
@@ -25,10 +28,20 @@ use Livewire\WithFileUploads;
 |   readiness.review    Grants Management Representative: 6 checks (Confirmed / Exception / Action required + note),
 |                       spending in Lesotho, bank account verification, outstanding issues, Draft Grant Agreement (upload),
 |                       recommendation Ready / Not Ready → Grant Readiness Memo (PDF, generated) → submit to the Hub Manager
-|   readiness.hub       Hub Manager: Approved for submission · Returned for further action
-|   readiness.director  PMU Director of Implementation: Approved to proceed (→ EOI "authorisation", Gate 5) · Returned
+|   readiness.hub       Hub Manager: review checklist (GrantReadiness::HUB_CHECKS) → Approved for submission · Returned
+|   readiness.director  PMU Director of Implementation: review checklist (DIRECTOR_CHECKS) → Approved to proceed
+|                       (→ EOI "authorisation", Gate 5) · Returned
+|                       Both checklists start with reviewing the Investment Appraisal Memorandum, the Grant Readiness Memo
+|                       and the Draft Grant Agreement (each opens from the checklist). Approving needs every item ticked.
 |   A return closes the round and opens the next one at Grants Management with everything carried over.
-|   Internal control point — the applicant only sees that the file is being prepared.
+|   Internal control point — the applicant only sees that the file is being prepared, except for:
+|
+|   Bank account for the grant (no longer on the enterprise profile):
+|     Grants Management clicks "Request bank details" → the applicant is e-mailed a link to this tab (#g4-bank).
+|     While the review is with Grants Management, the applicant sees ONLY a form: bank, branch, account type,
+|     account name, account number + bank confirmation letter → "Submit bank details" (e-mails Grants Management + PMU).
+|     Stored on enterprise_profiles.bank_* and as the enterprise document "bank_confirmation"; Grants Management
+|     verifies them as before.
 |
 |   E-mails: submitted → Hub Manager · Hub approved → PMU Director · returned → Grants Management + PMU
 |            approved → PMU + Managing Director / Principal Secretary accounts
@@ -44,13 +57,17 @@ new class extends Component
     /** Grants Management: checks{}, lesotho_pct, bank{}, issues[], recommendation, justification, gm_on */
     public array $form = [];
 
-    /** Hub Manager / PMU Director: decision, comments, on */
+    /** Hub Manager / PMU Director: decision, comments, on, checks{key: {done, note, at}} */
     public array $hub = [];
     public array $director = [];
 
     /** Uploads */
     public $agreementFile = null;
     public $bankEvidenceFile = null;
+
+    /** Applicant: bank account for the grant (bank_name, bank_branch, bank_account_type, bank_account_name, bank_account_number) */
+    public array $applicantBank = [];
+    public $bankLetterFile = null;
 
     public ?string $savedAt = null;
 
@@ -83,6 +100,14 @@ new class extends Component
         return CommitteeReview::where('expression_of_interest_id', $this->eoiId)
             ->whereIn('outcome', [CommitteeReview::OUTCOME_APPROVE, CommitteeReview::OUTCOME_CONDITIONAL])
             ->whereNotNull('decided_at')->orderByDesc('round')->first();
+    }
+
+    /** The Gate 2 assessment whose Investment Appraisal Memorandum went to the Committee */
+    #[Computed] public function dd(): ?\App\Models\DueDiligence
+    {
+        return \App\Models\DueDiligence::where('expression_of_interest_id', $this->eoiId)
+            ->where('outcome', \App\Models\DueDiligence::OUTCOME_PROCEED)->whereNotNull('decided_at')
+            ->orderByDesc('round')->first();
     }
 
     #[Computed] public function profile(): ?EnterpriseProfile
@@ -125,11 +150,17 @@ new class extends Component
             && auth()->user()->can(GrantReadiness::STAGE_PERMISSION[$stage]);
     }
 
+    /** The applicant may enter the bank details: requested by Grants Management, and the review is still with them */
+    #[Computed] public function canApplicantBank(): bool
+    {
+        return $this->isApplicant && $this->isOpen && $this->stage === 'grants' && $this->gr?->bank_requested_at !== null;
+    }
+
     #[Computed] public function canGrants(): bool   { return $this->canAt('grants'); }
     #[Computed] public function canHub(): bool      { return $this->canAt('hub'); }
     #[Computed] public function canDirector(): bool { return $this->canAt('director'); }
 
-    /** Why a staff member sees the review read-only (null = they can edit, or it's simply finished) */
+    /** Why a staff member sees the review read-only, in plain words (null = they can edit, or it's simply finished) */
     #[Computed] public function lockReason(): ?string
     {
         if ($this->isApplicant || $this->canGrants || $this->canHub || $this->canDirector) {
@@ -141,7 +172,7 @@ new class extends Component
         if ($eoi->status !== ExpressionOfInterest::STATUS_GRANT_READINESS) {
             return $this->gr?->isApproved()
                 ? null
-                : 'The application status is "'.$eoi->status.'", not "'.ExpressionOfInterest::STATUS_GRANT_READINESS.'". Gate 4 can only be edited while the application is in grant readiness.';
+                : 'This application has moved on from grant readiness (it is now at "'.Str::headline($eoi->status).'"), so this review can no longer be changed.';
         }
         if ($this->gr?->isDecided()) {
             return 'This round is closed.';
@@ -149,9 +180,12 @@ new class extends Component
 
         $perm = GrantReadiness::STAGE_PERMISSION[$this->stage] ?? null;
         if ($perm && ! auth()->user()->can($perm)) {
-            $roles = auth()->user()->getRoleNames()->implode(', ') ?: 'none';
+            $roles = auth()->user()->roles
+                ->map(fn ($r) => $r->label ?: Str::headline($r->name))
+                ->filter()->unique()->values();
 
-            return 'The file is at the '.$who.' step, which needs the "'.$perm.'" permission. Your roles: '.$roles.'.';
+            return 'It is with the '.$who.' at the moment — only they can work on this step. '
+                .($roles->isNotEmpty() ? 'You are signed in as '.$roles->implode(', ', ' and ').', so you can view it but not make changes.' : 'You can view it but not make changes.');
         }
 
         return null;
@@ -206,22 +240,38 @@ new class extends Component
             'justification'  => (string) $g?->justification,
             'gm_on'          => $g?->gm_on?->toDateString() ?? now()->toDateString(),
         ];
+
+        $p = $this->profile;
+        $this->applicantBank = [
+            'bank_name'           => (string) $p?->bank_name,
+            'bank_branch'         => (string) $p?->bank_branch,
+            'bank_account_type'   => $p?->bank_account_type,
+            'bank_account_name'   => (string) ($p?->bank_account_name ?: $p?->registered_name),
+            'bank_account_number' => (string) $p?->bank_account_number,
+        ];
+        $checklist = fn (array $defs, ?array $saved) => collect($defs)->mapWithKeys(fn ($d, $k) => [$k => [
+            'done' => (bool) ($saved[$k]['done'] ?? false),
+            'note' => (string) ($saved[$k]['note'] ?? ''),
+            'at'   => $saved[$k]['at'] ?? null,
+        ]])->all();
         $this->hub = [
             'decision' => $g?->hub_decision,
             'comments' => (string) $g?->hub_comments,
             'on'       => $g?->hub_on?->toDateString() ?? now()->toDateString(),
+            'checks'   => $checklist(GrantReadiness::HUB_CHECKS, $g?->hub_checks),
         ];
         $this->director = [
             'decision' => $g?->director_decision,
             'comments' => (string) $g?->director_comments,
             'on'       => $g?->director_on?->toDateString() ?? now()->toDateString(),
+            'checks'   => $checklist(GrantReadiness::DIRECTOR_CHECKS, $g?->director_checks),
         ];
 
-        unset($this->gr, $this->stage, $this->history, $this->blockers, $this->facts);
+        unset($this->gr, $this->stage, $this->history, $this->blockers, $this->facts, $this->canApplicantBank);
     }
 
     /**
-     * Bank details as entered by the enterprise in its profile (Business → Bank account for the grant).
+     * Bank details as entered by the applicant at this step (stored on the enterprise profile) (Business → Bank account for the grant).
      * Grants Management only records what they were verified against. Falls back to what is stored on the round.
      */
     protected function bankFromProfile(array $stored = []): array
@@ -347,6 +397,127 @@ new class extends Component
     }
 
     /* =====================================================================
+     | Bank account for the grant — requested from and entered by the applicant
+     ===================================================================== */
+
+    /** Grants Management e-mails the applicant a link to enter the bank details here */
+    public function requestBankDetails(): void
+    {
+        abort_unless($this->canGrants, 403);
+
+        $g        = $this->persist();
+        $reminder = $g->bank_requested_at !== null;
+        $g->forceFill(['bank_requested_at' => now(), 'bank_requested_by' => auth()->id()])->save();
+
+        $applicant = $this->eoi->user;
+        if (! $applicant || blank($applicant->email)) {
+            $this->after('Requested — but the applicant has no e-mail address. Ask them to open the Grant readiness tab of their application.');
+            return;
+        }
+
+        try {
+            $applicant->notify(new EoiBankDetailsRequested($this->eoi, $reminder));
+            $msg = ($reminder ? 'Reminder sent' : 'Request sent').' to '.$applicant->email.'. They can now enter the bank details in the Grant readiness tab.';
+        } catch (\Throwable $e) {
+            report($e);
+            $msg = 'Recorded, but the e-mail could not be sent — ask the applicant to open the Grant readiness tab of their application.'.NotifyRecipients::debugReason($e);
+        }
+
+        unset($this->canApplicantBank);
+        $this->after($msg);
+    }
+
+    /** Applicant: bank confirmation letter (replaces an earlier one) */
+    public function updatedBankLetterFile(): void
+    {
+        abort_unless($this->canApplicantBank, 403);
+
+        $mimes = EnterpriseDocument::mimesFor('bank_confirmation');
+        $this->validate(
+            ['bankLetterFile' => ['required', 'file', "mimes:$mimes", 'max:'.EnterpriseDocument::MAX_KB]],
+            [
+                'bankLetterFile.mimes' => 'Upload a PDF or a clear scan / photo ('.strtoupper(str_replace(',', ', ', $mimes)).').',
+                'bankLetterFile.max'   => 'The file is too big — it can be at most '.(EnterpriseDocument::MAX_KB / 1024).' MB.',
+            ],
+            ['bankLetterFile' => 'bank confirmation letter'],
+        );
+
+        $p = $this->profile;
+        abort_unless($p, 404);
+        $file = $this->bankLetterFile;
+
+        DB::transaction(function () use ($p, $file) {
+            $p->documents()->where('type', 'bank_confirmation')->get()->each->delete();   // also removes the old file
+            $p->documents()->create([
+                'type'          => 'bank_confirmation',
+                'path'          => $file->store("enterprise-documents/{$p->id}", EnterpriseDocument::DISK),
+                'original_name' => $file->getClientOriginalName(),
+                'mime'          => $file->getMimeType(),
+                'size'          => $file->getSize(),
+                'uploaded_by'   => auth()->id(),
+            ]);
+        });
+
+        $this->reset('bankLetterFile');
+        unset($this->profile);
+        $this->dispatch('notify', type: 'success', message: 'Bank confirmation letter uploaded.');
+    }
+
+    public function removeBankLetter(): void
+    {
+        abort_unless($this->canApplicantBank, 403);
+        $this->profile?->documents()->where('type', 'bank_confirmation')->get()->each->delete();
+        unset($this->profile);
+    }
+
+    /** Applicant: save the bank details and let Grants Management know */
+    public function submitBankDetails(): void
+    {
+        abort_unless($this->canApplicantBank, 403);
+
+        $this->validate([
+            'applicantBank.bank_name'           => ['required', 'string', 'max:120'],
+            'applicantBank.bank_branch'         => ['nullable', 'string', 'max:120'],
+            'applicantBank.bank_account_type'   => ['nullable', Rule::in(array_keys(GrantReadiness::ACCOUNT_TYPES))],
+            'applicantBank.bank_account_name'   => ['required', 'string', 'max:200'],
+            'applicantBank.bank_account_number' => ['required', 'string', 'max:40', 'regex:/^[0-9 \-]+$/'],
+        ], [
+            'applicantBank.bank_name.required'           => 'Enter the name of your bank.',
+            'applicantBank.bank_account_name.required'   => 'Enter the account name, exactly as it appears on the account.',
+            'applicantBank.bank_account_number.required' => 'Enter the account number.',
+            'applicantBank.bank_account_number.regex'    => 'The account number can only contain digits, spaces and dashes.',
+        ], [
+            'applicantBank.bank_name' => 'bank', 'applicantBank.bank_branch' => 'branch', 'applicantBank.bank_account_type' => 'account type',
+            'applicantBank.bank_account_name' => 'account name', 'applicantBank.bank_account_number' => 'account number',
+        ]);
+
+        $p = $this->profile;
+        abort_unless($p, 404);
+
+        if (! $p->document('bank_confirmation')) {
+            $this->addError('bankLetterFile', 'Upload your bank confirmation letter.');
+            return;
+        }
+
+        $first = $this->gr?->bank_submitted_at === null;
+
+        DB::transaction(function () use ($p) {
+            $p->forceFill(collect($this->applicantBank)->map(fn ($v) => is_string($v) ? (trim($v) ?: null) : ($v ?: null))->all())->save();
+            GrantReadiness::whereKey($this->grId)->update(['bank_submitted_at' => now()]);
+        });
+
+        $note = NotifyRecipients::send(
+            NotifyRecipients::withPermission('readiness.review')->merge(NotifyRecipients::pmu())->unique('id')->values(),
+            new EoiBankDetailsSubmitted($this->eoi, $p->fresh()),
+            'the LEHSFF team', except: auth()->id(),
+        );
+
+        unset($this->gr, $this->profile);
+        $this->dispatch('notify', type: 'success', message: ($first ? 'Thank you — your bank details have been sent to the LEHSFF team.' : 'Your bank details have been updated.').' You can still correct them until the team completes its review.');
+        unset($note);
+    }
+
+    /* =====================================================================
      | Step 1 · Grants Management → Hub Manager
      ===================================================================== */
 
@@ -364,9 +535,9 @@ new class extends Component
             'form.justification'        => ['required', 'string', 'max:2000'],
             'form.gm_on'                => ['required', 'date', 'before_or_equal:today'],
         ], [
-            'form.bank.bank.required'             => 'The enterprise has not entered its bank in the profile (Business → Bank account for the grant).',
-            'form.bank.account_name.required'     => 'The enterprise has not entered the account name in the profile.',
-            'form.bank.account_number.required'   => 'The enterprise has not entered the account number in the profile.',
+            'form.bank.bank.required'             => 'The applicant has not entered their bank yet — use "Request bank details".',
+            'form.bank.account_name.required'     => 'The applicant has not entered the account name yet.',
+            'form.bank.account_number.required'   => 'The applicant has not entered the account number yet.',
             'form.lesotho_pct.required'           => 'The enterprise has not yet said how much of the grant is spent outside Lesotho (profile → Business, after the budget).',
             'form.bank.verified_against.required' => 'Say what the bank details were verified against.',
             'form.recommendation.required'        => 'Record the readiness recommendation.',
@@ -448,8 +619,39 @@ new class extends Component
         $this->after('Approved to proceed to Gate 5 · Final authorisation. '.$note);
     }
 
+    /** Checklist answers to store: done, note, and when each item was ticked */
+    protected function checksToSave(string $who, array $defs): array
+    {
+        $saved = (array) ($who === 'hub' ? $this->gr?->hub_checks : $this->gr?->director_checks);
+
+        return collect($defs)->mapWithKeys(function ($d, $k) use ($who, $saved) {
+            $done = (bool) ($this->{$who}['checks'][$k]['done'] ?? false);
+            $at   = $done ? ($saved[$k]['at'] ?? now()->toDateTimeString()) : null;
+            $this->{$who}['checks'][$k]['at'] = $at;
+
+            return [$k => [
+                'done' => $done,
+                'note' => Str::limit(trim((string) ($this->{$who}['checks'][$k]['note'] ?? '')), 500, ''),
+                'at'   => $at,
+            ]];
+        })->all();
+    }
+
     protected function validateDecision(string $who, array $decisions): void
     {
+        // Approving needs every checklist item ticked (the three documents and the review criteria)
+        if (($this->{$who}['decision'] ?? null) === 'approved') {
+            $defs    = $who === 'hub' ? GrantReadiness::HUB_CHECKS : GrantReadiness::DIRECTOR_CHECKS;
+            $missing = collect($defs)->reject(fn ($d, $k) => $this->{$who}['checks'][$k]['done'] ?? false);
+            if ($missing->isNotEmpty()) {
+                foreach ($missing as $k => $d) {
+                    $this->addError("$who.checks.$k", 'Tick this once reviewed.');
+                }
+                $this->addError("$who.decision", 'Complete the review checklist before approving: '.$missing->map(fn ($d) => $d[0])->implode('; ').'.');
+                throw \Illuminate\Validation\ValidationException::withMessages(["$who.decision" => 'Complete the review checklist before approving.']);
+            }
+        }
+
         $this->validate([
             "$who.decision" => ['required', Rule::in(array_keys($decisions))],
             "$who.comments" => [($this->{$who}['decision'] ?? null) === 'returned' ? 'required' : 'nullable', 'string', 'max:3000'],
@@ -469,6 +671,7 @@ new class extends Component
             $new = GrantReadiness::create($g->only([
                 'expression_of_interest_id', 'committee_review_id', 'private_amount', 'grant_amount',
                 'checks', 'lesotho_pct', 'bank', 'bank_evidence_path', 'bank_evidence_name',
+                'bank_requested_at', 'bank_requested_by', 'bank_submitted_at',
                 'agreement_path', 'agreement_name', 'agreement_size', 'agreement_uploaded_at',
                 'issues', 'recommendation', 'justification',
             ]) + [
@@ -502,11 +705,13 @@ new class extends Component
                 'hub_decision' => $this->hub['decision'] ?: null,
                 'hub_comments' => trim((string) $this->hub['comments']) ?: null,
                 'hub_on'       => $this->hub['on'] ?: null,
+                'hub_checks'   => $this->checksToSave('hub', GrantReadiness::HUB_CHECKS),
             ],
             'director' => [
                 'director_decision' => $this->director['decision'] ?: null,
                 'director_comments' => trim((string) $this->director['comments']) ?: null,
                 'director_on'       => $this->director['on'] ?: null,
+                'director_checks'   => $this->checksToSave('director', GrantReadiness::DIRECTOR_CHECKS),
             ],
             default => [
                 'checks'         => collect($this->form['checks'])->map(fn ($c) => [
@@ -550,7 +755,7 @@ new class extends Component
 
     protected function after(string $message): void
     {
-        unset($this->eoi, $this->gr, $this->stage, $this->isOpen, $this->canGrants, $this->canHub, $this->canDirector, $this->lockReason, $this->history, $this->blockers);
+        unset($this->eoi, $this->gr, $this->stage, $this->isOpen, $this->canGrants, $this->canHub, $this->canDirector, $this->canApplicantBank, $this->lockReason, $this->history, $this->blockers);
         $this->dispatch('notify', type: 'success', message: trim($message));
     }
 
@@ -635,17 +840,107 @@ new class extends Component
      APPLICANT — internal step, no details
      ====================================================================== --}}
 @elseif ($this->isApplicant)
-    <section class="section-card">
-        <div class="section-card-head">
-            <span class="section-no">G4</span>
-            <h5 class="me-auto">Grant readiness</h5>
-            <span class="pill {{ $g?->isApproved() ? 'pill-ok' : 'pill-warn' }}"><i class="bi {{ $g?->isApproved() ? 'bi-check2-circle' : 'bi-hourglass-split' }}"></i> {{ $g?->isApproved() ? 'Complete' : 'In progress' }}</span>
-        </div>
-        <p class="small text-muted mb-0">
-            @if ($g?->isApproved()) Your grant file has been prepared and is with CAFI management for final authorisation.
-            @else The LEHSFF team is preparing your grant file: reviewing the grant budget and your bank account details, and drafting the Grant Agreement. They may contact you if anything is needed. @endif
-        </p>
-    </section>
+    @php
+        $ap      = $this->profile;
+        $apLetter = $ap?->document('bank_confirmation');
+        $apSent  = $g?->bank_submitted_at;
+    @endphp
+    @if ($this->canApplicantBank)
+        {{-- The applicant sees only this: the bank account for the grant --}}
+        <section class="section-card" id="g4-bank">
+            <div class="section-card-head">
+                <span class="section-no"><i class="bi bi-bank"></i></span>
+                <div class="me-auto">
+                    <h5>Bank account for the grant</h5>
+                    <div class="small text-muted">The account your CAFI grant will be paid into. It must be held in your company's registered name{{ $ap?->registered_name ? ' ('.$ap->registered_name.')' : '' }} — not a personal account.</div>
+                </div>
+                @if ($apSent)
+                    <span class="pill pill-ok"><i class="bi bi-check2-circle"></i> Sent {{ $apSent->format('d M Y') }}</span>
+                @else
+                    <span class="pill pill-warn"><i class="bi bi-hourglass-split"></i> Needed</span>
+                @endif
+            </div>
+
+            @if ($apSent)
+                <div class="callout callout-success small mb-3"><i class="bi bi-check2-circle me-1"></i>
+                    The LEHSFF team has your bank details and is checking them against your letter. You can still correct them below until the check is complete.</div>
+            @endif
+
+            <div class="row g-3">
+                <div class="col-md-4">
+                    <label class="form-label small fw-semibold mb-1" for="ab_bank">Bank <span class="req">*</span></label>
+                    <input type="text" id="ab_bank" maxlength="120" class="form-control @error('applicantBank.bank_name') is-invalid @enderror" wire:model.blur="applicantBank.bank_name" placeholder="e.g. Standard Lesotho Bank">
+                    @error('applicantBank.bank_name') <div class="invalid-feedback">{{ $message }}</div> @enderror
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label small fw-semibold mb-1" for="ab_branch">Branch</label>
+                    <input type="text" id="ab_branch" maxlength="120" class="form-control @error('applicantBank.bank_branch') is-invalid @enderror" wire:model.blur="applicantBank.bank_branch" placeholder="e.g. Kingsway, Maseru">
+                    @error('applicantBank.bank_branch') <div class="invalid-feedback">{{ $message }}</div> @enderror
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label small fw-semibold mb-1" for="ab_type">Account type</label>
+                    <select id="ab_type" class="form-select @error('applicantBank.bank_account_type') is-invalid @enderror" wire:model="applicantBank.bank_account_type">
+                        <option value="">Select…</option>
+                        @foreach ($G::ACCOUNT_TYPES as $atk => $atl) <option value="{{ $atk }}">{{ $atl }}</option> @endforeach
+                    </select>
+                    @error('applicantBank.bank_account_type') <div class="invalid-feedback">{{ $message }}</div> @enderror
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label small fw-semibold mb-1" for="ab_aname">Account name <span class="req">*</span></label>
+                    <input type="text" id="ab_aname" maxlength="200" class="form-control @error('applicantBank.bank_account_name') is-invalid @enderror" wire:model.blur="applicantBank.bank_account_name">
+                    <div class="form-text">Exactly as it appears on the account.</div>
+                    @error('applicantBank.bank_account_name') <div class="invalid-feedback">{{ $message }}</div> @enderror
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label small fw-semibold mb-1" for="ab_anum">Account number <span class="req">*</span></label>
+                    <input type="text" id="ab_anum" maxlength="40" inputmode="numeric" class="form-control @error('applicantBank.bank_account_number') is-invalid @enderror" wire:model.blur="applicantBank.bank_account_number">
+                    @error('applicantBank.bank_account_number') <div class="invalid-feedback">{{ $message }}</div> @enderror
+                </div>
+
+                <div class="col-12">
+                    <label class="form-label small fw-semibold mb-1">Bank confirmation letter <span class="req">*</span></label>
+                    <div class="form-text mt-0 mb-2">A letter from your bank, or a recent bank statement with the bank's stamp, showing the account name and number. PDF or a clear photo / scan, up to {{ \App\Models\EnterpriseDocument::MAX_KB / 1024 }} MB.</div>
+                    @if ($apLetter)
+                        <div class="file-row mb-2">
+                            <span class="file-row-icon"><i class="bi bi-file-earmark-check"></i></span>
+                            <div class="flex-grow-1 small overflow-hidden">
+                                <a href="{{ route('enterprise-documents.download', $apLetter) }}" class="fw-semibold text-navy text-decoration-none text-truncate d-block">{{ $apLetter->original_name }}</a>
+                                <div class="text-muted">{{ $apLetter->size_label }} · uploaded {{ $apLetter->created_at?->format('d M Y') }}</div>
+                            </div>
+                            <label class="btn btn-sm btn-outline-secondary mb-0">Replace <input type="file" class="d-none" wire:model="bankLetterFile" accept="{{ \App\Models\EnterpriseDocument::acceptFor('bank_confirmation') }}"></label>
+                            <button type="button" class="btn btn-icon btn-icon-danger" title="Remove" wire:click="removeBankLetter" wire:confirm="Remove the bank confirmation letter?"><i class="bi bi-trash"></i></button>
+                        </div>
+                    @else
+                        <input type="file" class="form-control @error('bankLetterFile') is-invalid @enderror" wire:model="bankLetterFile" accept="{{ \App\Models\EnterpriseDocument::acceptFor('bank_confirmation') }}">
+                    @endif
+                    <span wire:loading wire:target="bankLetterFile" class="small text-muted"><span class="spinner-border spinner-border-sm me-1"></span> Uploading…</span>
+                    @error('bankLetterFile') <div class="text-danger small mt-1">{{ $message }}</div> @enderror
+                </div>
+            </div>
+
+            <div class="d-flex mt-4 pt-3 border-top">
+                <button type="button" class="btn btn-brand ms-auto" wire:click="submitBankDetails" wire:loading.attr="disabled" wire:target="submitBankDetails,bankLetterFile">
+                    <span wire:loading.remove wire:target="submitBankDetails"><i class="bi bi-send me-1"></i> {{ $apSent ? 'Update bank details' : 'Submit bank details' }}</span>
+                    <span wire:loading wire:target="submitBankDetails"><span class="spinner-border spinner-border-sm me-1"></span> Sending…</span>
+                </button>
+            </div>
+        </section>
+    @else
+        <section class="section-card">
+            <div class="section-card-head">
+                <span class="section-no">G4</span>
+                <h5 class="me-auto">Grant readiness</h5>
+                <span class="pill {{ $g?->isApproved() ? 'pill-ok' : 'pill-warn' }}"><i class="bi {{ $g?->isApproved() ? 'bi-check2-circle' : 'bi-hourglass-split' }}"></i> {{ $g?->isApproved() ? 'Complete' : 'In progress' }}</span>
+            </div>
+            <p class="small text-muted mb-0">
+                @if ($g?->isApproved()) Your grant file has been prepared and is with CAFI management for final authorisation.
+                @else The LEHSFF team is preparing your grant file: reviewing the grant budget and your bank account details, and drafting the Grant Agreement. They may contact you if anything is needed. @endif
+            </p>
+            @if ($apSent)
+                <div class="small text-success mt-2"><i class="bi bi-check2-circle me-1"></i> Your bank details were received on {{ $apSent->format('d M Y') }}.</div>
+            @endif
+        </section>
+    @endif
 
 {{-- ======================================================================
      STAFF
@@ -740,7 +1035,7 @@ new class extends Component
             <div class="col-md-4">
                 <div class="border rounded-3 p-2 h-100 small">
                     <div class="detail-label mb-1">Matching formula</div>
-                    Max {{ $P::grantRatioLabel() }} of private investment = <strong>{{ $m($facts['matching_max'] ?? null) }}</strong>
+                    Max under the grant rule ({{ $P::grantRatioLabel() }}) = <strong>{{ $m($facts['matching_max'] ?? null) }}</strong>
                     <div class="{{ ($facts['matching_ok'] ?? false) ? 'text-success' : 'text-danger' }}"><i class="bi {{ ($facts['matching_ok'] ?? false) ? 'bi-check-circle' : 'bi-x-circle' }} me-1"></i>{{ ($facts['matching_ok'] ?? false) ? 'Grant complies' : 'Grant above the maximum' }}</div>
                 </div>
             </div>
@@ -781,21 +1076,23 @@ new class extends Component
         </div>
 
         {{-- Grant utilisation budget from the profile --}}
-        @if ($btotals['grant'] > 0 || $btotals['private'] > 0)
+        @if ($btotals['grant'] > 0)
             <details class="evidence mb-3">
-                <summary><i class="bi bi-pie-chart me-1"></i> Grant utilisation budget (enterprise profile) — CAFI grant {{ $m($btotals['grant']) }} · investor {{ $m($btotals['private']) }}</summary>
+                <summary><i class="bi bi-pie-chart me-1"></i> Grant utilisation budget (enterprise profile) — CAFI grant {{ $m($btotals['grant']) }}</summary>
                 <div class="table-responsive">
                     <table class="table table-modern table-sm align-middle mb-0">
-                        <thead><tr><th>Category</th><th class="text-end">Investor (M)</th><th class="text-end">CAFI grant (M)</th></tr></thead>
+                        <thead><tr><th>Category</th><th class="text-end">CAFI grant (M)</th></tr></thead>
                         <tbody>
                             @foreach ($budget as $row)
-                                @continue((float) ($row['private'] ?? 0) + (float) ($row['grant'] ?? 0) <= 0)
+                                @continue((float) ($row['grant'] ?? 0) <= 0)
                                 <tr><td class="small">{{ $row['category'] }}</td>
-                                    <td class="text-end small">{{ number_format((float) ($row['private'] ?? 0)) }}</td>
                                     <td class="text-end small">{{ number_format((float) ($row['grant'] ?? 0)) }}</td></tr>
+                                @foreach ($row['items'] ?? [] as $bit)
+                                    <tr><td class="small text-muted ps-4">↳ {{ $bit['name'] ?? '' }}</td><td class="text-end small text-muted">{{ number_format((float) ($bit['grant'] ?? 0)) }}</td></tr>
+                                @endforeach
                             @endforeach
                         </tbody>
-                        <tfoot><tr class="fw-semibold"><td>Total</td><td class="text-end">{{ number_format($btotals['private']) }}</td><td class="text-end">{{ number_format($btotals['grant']) }}</td></tr></tfoot>
+                        <tfoot><tr class="fw-semibold"><td>Total</td><td class="text-end">{{ number_format($btotals['grant']) }}</td></tr></tfoot>
                     </table>
                 </div>
                 @if ($p?->document('budget'))
@@ -829,7 +1126,34 @@ new class extends Component
 
         {{-- Bank account --}}
         <div class="g2-sub">
-            <div class="g2-sub-head"><i class="bi bi-bank me-1"></i> Bank account verification <span class="text-muted fw-normal">— entered by the enterprise in its profile; check it against the evidence</span></div>
+            <div class="g2-sub-head" id="g4-bank"><i class="bi bi-bank me-1"></i> Bank account verification <span class="text-muted fw-normal">— entered by the applicant at this step; check it against their bank confirmation letter</span></div>
+
+            {{-- Request from the applicant --}}
+            @php
+                $bkAsked = $g?->bank_requested_at;
+                $bkSent  = $g?->bank_submitted_at;
+                $bkAsker = $g?->bank_requested_by ? \App\Models\User::find($g->bank_requested_by)?->name : null;
+            @endphp
+            <div class="d-flex flex-wrap align-items-center gap-2 border rounded-3 p-2 mb-3 {{ $bkSent ? 'bg-success-subtle' : 'bg-light' }}">
+                <i class="bi {{ $bkSent ? 'bi-check2-circle text-success' : ($bkAsked ? 'bi-envelope-check text-primary' : 'bi-envelope') }} fs-5 ms-1"></i>
+                <div class="small me-auto">
+                    @if ($bkSent)
+                        <strong>Received from the applicant</strong> on {{ $bkSent->format('d M Y H:i') }}.
+                        <span class="text-muted">They can still correct them until you submit to the Hub Manager.</span>
+                    @elseif ($bkAsked)
+                        <strong>Requested</strong> {{ $bkAsked->diffForHumans() }}{{ $bkAsker ? ' by '.$bkAsker : '' }} — waiting for the applicant.
+                    @else
+                        The applicant enters the bank details and uploads the letter themselves. Send them a link by e-mail.
+                    @endif
+                </div>
+                @if ($canG)
+                    <button type="button" class="btn btn-sm {{ $bkAsked ? 'btn-outline-secondary' : 'btn-brand' }}" wire:click="requestBankDetails" wire:loading.attr="disabled" wire:target="requestBankDetails"
+                            wire:confirm="{{ $bkAsked ? 'Send the applicant a reminder by e-mail?' : 'E-mail the applicant a link to enter their bank details and upload a bank confirmation letter?' }}">
+                        <span wire:loading.remove wire:target="requestBankDetails"><i class="bi bi-envelope-arrow-up me-1"></i>{{ $bkAsked ? 'Send reminder' : 'Request bank details' }}</span>
+                        <span wire:loading wire:target="requestBankDetails"><span class="spinner-border spinner-border-sm me-1"></span> Sending…</span>
+                    </button>
+                @endif
+            </div>
             @php
                 $bk        = $form['bank'] ?? [];
                 $bkFilled  = filled($bk['bank'] ?? null) && filled($bk['account_name'] ?? null) && filled($bk['account_number'] ?? null);
@@ -849,19 +1173,19 @@ new class extends Component
                 </div>
             @else
                 <div class="callout callout-warning small mb-2"><i class="bi bi-exclamation-triangle me-1"></i>
-                    The enterprise has not entered its bank details yet. Ask them to complete <strong>Business → Bank account for the grant</strong> in their profile.</div>
+                    The applicant has not entered their bank details yet.{{ $bkAsked ? '' : ' Use Request bank details above to e-mail them the link.' }}</div>
             @endif
 
             <div class="row g-2">
                 <div class="col-md-6">
-                    <label class="form-label small fw-semibold mb-1">Evidence from the enterprise</label>
+                    <label class="form-label small fw-semibold mb-1">Evidence from the applicant</label>
                     @if ($bankDoc)
                         <div class="small"><a href="{{ route('enterprise-documents.download', $bankDoc) }}" class="text-decoration-none"><i class="bi bi-paperclip"></i> {{ \Illuminate\Support\Str::limit($bankDoc->original_name, 45) }}</a>
                             <span class="text-muted">· bank confirmation letter</span></div>
                     @else
-                        <div class="small text-muted">No bank confirmation letter uploaded in the profile.</div>
+                        <div class="small text-muted">No bank confirmation letter uploaded yet.</div>
                     @endif
-                    <label class="form-label small fw-semibold mb-1 mt-2">Other verification document <span class="text-muted fw-normal">(optional{{ $bankDoc ? '' : ' — needed if the enterprise has not uploaded a letter' }})</span></label>
+                    <label class="form-label small fw-semibold mb-1 mt-2">Other verification document <span class="text-muted fw-normal">(optional{{ $bankDoc ? '' : ' — needed if the applicant has not uploaded a letter' }})</span></label>
                     @if ($g?->bank_evidence_path)
                         <div class="d-flex align-items-center gap-2 small">
                             <a href="{{ route('grant-readiness.file', [$g, 'bank_evidence']) }}" class="text-decoration-none text-truncate"><i class="bi bi-paperclip"></i> {{ $g->bank_evidence_name }}</a>
@@ -882,7 +1206,7 @@ new class extends Component
                         @foreach ($G::BANK_EVIDENCE as $ek => $el) <option value="{{ $ek }}">{{ $el }}</option> @endforeach
                     </select>
                     @error('form.bank.verified_against') <div class="text-danger small">{{ $message }}</div> @enderror
-                    <div class="form-text">Then record the result in the <strong>Bank account</strong> check above: Confirmed if the details match the evidence, or Action required if the enterprise must correct its profile.</div>
+                    <div class="form-text">Then record the result in the <strong>Bank account</strong> check above: Confirmed if the details match the evidence, or Action required if the applicant must correct them (they can, until you submit).</div>
                 </div>
             </div>
         </div>
@@ -1028,6 +1352,58 @@ new class extends Component
                     <div>Opens once {{ $who === 'hub' ? 'Grants Management has submitted the file' : 'the Hub Manager has approved the file for submission' }}. The reviews are sequential.</div>
                 </div>
             @else
+                {{-- Review checklist: the three documents, then the criteria of this step --}}
+                @php
+                    $defs     = $who === 'hub' ? $G::HUB_CHECKS : $G::DIRECTOR_CHECKS;
+                    $ticked   = collect($defs)->filter(fn ($d, $k) => $val['checks'][$k]['done'] ?? false)->count();
+                    $ddMemo   = $this->dd;
+                    $docLink  = fn (?string $doc) => match ($doc) {
+                        'iam'       => $ddMemo ? [route('due-diligence.memorandum', $ddMemo), 'Open memorandum', 'bi-file-earmark-pdf'] : null,
+                        'memo'      => $g ? [route('grant-readiness.memo', $g), 'Open memo', 'bi-file-earmark-pdf'] : null,
+                        'agreement' => $g?->agreement_path ? [route('grant-readiness.file', [$g, 'agreement']), 'Open draft agreement', 'bi-file-earmark-text'] : null,
+                        default     => null,
+                    };
+                @endphp
+                <div class="g2-sub mb-3">
+                    <div class="g2-sub-head d-flex align-items-center">
+                        <span class="me-auto"><i class="bi bi-list-check me-1"></i> Review checklist</span>
+                        <span class="pill {{ $ticked === count($defs) ? 'pill-ok' : 'pill-warn' }}">{{ $ticked }} / {{ count($defs) }} done</span>
+                    </div>
+                    <div class="small text-muted mb-2">Open each document, review it, then tick it. Every item must be ticked before you can approve.</div>
+                    <div class="d-flex flex-column gap-2">
+                        @foreach ($defs as $ck => [$cLabel, $cHint, $cDoc])
+                            @php $row = $val['checks'][$ck] ?? ['done' => false, 'note' => '', 'at' => null]; $link = $docLink($cDoc); @endphp
+                            <div class="border rounded-3 p-2 {{ $row['done'] ? 'border-success' : '' }} @error("$who.checks.$ck") border-danger @enderror" wire:key="{{ $who }}-chk-{{ $ck }}">
+                                <div class="d-flex flex-wrap align-items-start gap-2">
+                                    <div class="form-check mb-0 flex-grow-1">
+                                        <input type="checkbox" class="form-check-input" id="{{ $who }}-chk-{{ $ck }}" wire:model.live="{{ $who }}.checks.{{ $ck }}.done" @disabled(! $can)>
+                                        <label class="form-check-label" for="{{ $who }}-chk-{{ $ck }}">
+                                            <span class="fw-semibold text-navy small">{{ $cLabel }}</span>
+                                            <span class="d-block small text-muted">{{ $cHint }}</span>
+                                            @if ($row['done'] && $row['at'])
+                                                <span class="d-block small text-success"><i class="bi bi-check2"></i> Ticked {{ \Illuminate\Support\Carbon::parse($row['at'])->format('d M Y H:i') }}</span>
+                                            @endif
+                                        </label>
+                                    </div>
+                                    @if ($cDoc)
+                                        @if ($link)
+                                            <a href="{{ $link[0] }}" target="_blank" class="btn btn-sm btn-outline-secondary"><i class="bi {{ $link[2] }} me-1"></i> {{ $link[1] }}</a>
+                                        @else
+                                            <span class="pill pill-warn"><i class="bi bi-exclamation-triangle"></i> Not available</span>
+                                        @endif
+                                    @endif
+                                </div>
+                                @if ($can)
+                                    <input type="text" class="form-control form-control-sm mt-2" wire:model.blur="{{ $who }}.checks.{{ $ck }}.note" placeholder="Note (optional)">
+                                @elseif (filled($row['note']))
+                                    <div class="small text-muted mt-1 fst-italic">“{{ $row['note'] }}”</div>
+                                @endif
+                                @error("$who.checks.$ck") <div class="text-danger small mt-1">{{ $message }}</div> @enderror
+                            </div>
+                        @endforeach
+                    </div>
+                </div>
+
                 <div class="choice-group cols-2 @error("$who.decision") is-invalid @enderror">
                     @foreach ($decisions as $v => [$dLabel, $dDesc, $dIcon])
                         <label class="choice choice--card">

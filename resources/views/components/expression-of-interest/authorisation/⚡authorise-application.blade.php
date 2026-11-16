@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\Authorisation;
+use App\Models\AuthorisationDocument;
 use App\Models\CommitteeReview;
 use App\Models\DueDiligence;
 use App\Models\EnterpriseProfile;
@@ -23,28 +24,25 @@ use Livewire\WithFileUploads;
 | G5 · Final Authorisation (CI Facility Operations Manual §3.6)  — tab key "g4" kept for existing links
 |   Used in the EOI page:  <livewire:expression-of-interest.authorisation.authorise-application :eoi-id="$eoi->id" />
 |
-|   Gate 4 Grant readiness → CAFI Managing Director signs the Grant Agreement → MTIBD Principal Secretary signs → Gate 6
-|   Sequential: the Principal Secretary acts only after the Managing Director has signed. Both signatures = formal approval.
+|   Gate 4 Grant readiness → CAFI Managing Director review → MTIBD Principal Secretary signature (outside the system) → Gate 6
 |   Inputs: Grant Readiness Memo + Draft Grant Agreement (Gate 4), Investment Committee recommendation, transaction file.
 |   Opens once the PMU Director of Implementation has approved Gate 4 (older transactions without a Gate 4 record still open).
 |
-|   gate4.md  Managing Director: confirms the review checks, classifies the conditions, then
-|             Sign & forward · Return for clarification or corrective action · Not approve
-|   gate4.ps  Principal Secretary: Sign (formally approve) · Return for clarification or corrective action · Not approve
-|   Outcomes: formally approved → Gate 6 · returned → authorisation_hold (resubmit = new round) · not approved → not_progressed
-|   Resubmission (PMU gate2.assess or MD): a round held by the PS goes straight back to the PS; one held by the MD restarts at the MD.
-|
-|   Signing outside the system — the MD and PS do not log in. For each authority, the PMU (gate2.assess) or a user with gate4.md / gate4.ps:
-|     1. sends the Grant Agreement and records who it was sent to (the PMU sends it themselves — no e-mail from the system).
-|        Default document: the Draft Grant Agreement from Gate 4 for the MD, the MD-signed agreement for the PS.
-|     2. uploads the signed copy when it comes back,
-|     3. records the decision written on it (checks, conditions, decision, comments, date). A signed copy is required.
+|   1 · Managing Director review (gate4.md or the PMU, gate2.assess) — the MD does not log in and does not sign:
+|       the PMU sends the documents to the MD itself (several files; default = the Gate 4 Draft Grant Agreement)
+|       and records who they went to, then records the MD's review: checks, conditions, and
+|       Satisfied — forward to the PS · Return for clarification or corrective action · Not approve
+|   2 · Principal Secretary signature (gate4.ps or the PMU) — no review screen: when the MD is satisfied the PMU forwards
+|       the documents to the PS by e-mail, outside the system, and uploads the signed documents when they come back
+|       (several files) → formally approved → Gate 6.
+|   Outcomes: formally approved → Gate 6 · MD returns → authorisation_hold (resubmit = new round, back to the MD) · MD declines → not_progressed
+|   Older rounds may still hold a PS 'clarify' / 'decline' decision; they are shown as before.
 |
 |   E-mails (sent after the decision is saved; a failed e-mail never undoes it):
-|     MD approve        → PMU: send to the Principal Secretary next
-|     MD / PS return    → PMU: resolve and resubmit (internal — the applicant is not e-mailed)
-|     MD / PS decline   → applicant: EoiGate4Outcome (not authorised) · PMU, Committee, MD/PS accounts: EoiAuthorisationUpdate
-|     PS authorise      → applicant: EoiGate4Outcome (authorised) · PMU, Committee, Finance, MD/PS accounts: EoiAuthorisationUpdate
+|     MD satisfied      → PMU: forward to the Principal Secretary by e-mail, then upload the signed documents
+|     MD return         → PMU: resolve and resubmit (internal — the applicant is not e-mailed)
+|     MD decline        → applicant: EoiGate4Outcome (not authorised) · PMU, Committee, MD/PS accounts: EoiAuthorisationUpdate
+|     PS signed         → applicant: EoiGate4Outcome (authorised) · PMU, Committee, Finance, MD/PS accounts: EoiAuthorisationUpdate
 */
 new class extends Component
 {
@@ -60,15 +58,23 @@ new class extends Component
     /** Managing Director: checks{}, decision, comments, on */
     public array $md = [];
 
-    /** Principal Secretary: decision, comments, on */
+    /** Principal Secretary: decision, comments, on (date signed) */
     public array $ps = [];
 
-    /** role => [name, email, message] — who the document is sent to for signing */
+    /** role => [name, email, message] — md: who the documents were sent to for review · ps: who signed */
     public array $signing = [];
 
-    /** role => document to be signed / signed copy (uploads) */
-    public array $requestFile = [];
-    public array $signedFile = [];
+    /** Documents for the MD's review — picked one (or several) at a time, listed, saved by sendToMd() */
+    public array $mdFiles = [];
+
+    /** The file input for the MD's documents; each pick is added to $mdFiles */
+    public array $mdPick = [];
+
+    /** Documents signed by the PS — saved as soon as they upload */
+    public array $psFiles = [];
+
+    /** Bumped after each pick so the file inputs come back empty, ready for the next file */
+    public int $pickKey = 0;
 
     public string $resubmissionNote = '';
     public ?string $savedAt = null;
@@ -128,6 +134,22 @@ new class extends Component
     #[Computed] public function profile(): ?EnterpriseProfile
     {
         return EnterpriseProfile::with('documents')->where('user_id', $this->eoi->user_id)->first();
+    }
+
+    /** Documents sent to the Managing Director for review (this round) */
+    #[Computed] public function mdDocs()
+    {
+        return $this->authId
+            ? AuthorisationDocument::where('authorisation_id', $this->authId)->where('kind', AuthorisationDocument::KIND_MD_SENT)->orderBy('id')->get()
+            : collect();
+    }
+
+    /** Documents signed by the Principal Secretary (this round) */
+    #[Computed] public function psDocs()
+    {
+        return $this->authId
+            ? AuthorisationDocument::where('authorisation_id', $this->authId)->where('kind', AuthorisationDocument::KIND_PS_SIGNED)->orderBy('id')->get()
+            : collect();
     }
 
     #[Computed] public function history()
@@ -242,13 +264,13 @@ new class extends Component
             $prev = $a?->{"{$r}_signer_email"} ? $a : Authorisation::where('expression_of_interest_id', $this->eoiId)
                 ->whereNotNull("{$r}_signer_email")->orderByDesc('round')->first();
             $this->signing[$r] = [
-                'name'       => (string) $prev?->{"{$r}_signer_name"},
-                'email'      => (string) $prev?->{"{$r}_signer_email"},
-                'message'    => (string) $a?->{"{$r}_request_message"},
+                'name'    => (string) $prev?->{"{$r}_signer_name"},
+                'email'   => (string) $prev?->{"{$r}_signer_email"},
+                'message' => (string) $a?->{"{$r}_request_message"},
             ];
         }
 
-        unset($this->auth, $this->stage, $this->history, $this->blockers);
+        unset($this->auth, $this->stage, $this->history, $this->blockers, $this->mdDocs, $this->psDocs);
     }
 
     /* =====================================================================
@@ -257,6 +279,10 @@ new class extends Component
 
     public function updated(string $name): void
     {
+        if (Str::startsWith($name, ['mdFiles', 'mdPick', 'psFiles', 'signing'])) {
+            return;   // uploads and the send / sign forms are saved by their own actions
+        }
+
         if (Str::startsWith($name, ['conditions', 'md'])) {
             if (! $this->canMd) {
                 $this->load();   // discard changes from someone who can't edit this stage
@@ -291,7 +317,7 @@ new class extends Component
     }
 
     /* =====================================================================
-     | Signing outside the system (MD / PS)
+     | Documents (sent to the MD for review · signed by the PS)
      ===================================================================== */
 
     protected function canRole(string $role): bool
@@ -299,115 +325,179 @@ new class extends Component
         return match ($role) { 'md' => $this->canMd, 'ps' => $this->canPs, default => false };
     }
 
-    /** Attach the document to be signed and record who it was sent to (the PMU sends it themselves) */
-    public function markSent(string $role): void
+    /** 1 · Attach the documents for the Managing Director's review and record who they went to (the PMU sends them itself) */
+    public function sendToMd(): void
     {
-        abort_unless($this->canRole($role), 403);
+        abort_unless($this->canMd, 403);
 
-        $a       = $this->authId ? Authorisation::find($this->authId) : null;
-        $default = $this->defaultDocument($role, $a);   // Gate 4 draft agreement (MD) / MD-signed agreement (PS)
-        $hasFile = (bool) $a?->{"{$role}_request_path"} || $default !== null;
+        $existing = $this->mdDocs->count();
+        $default  = ($existing || $this->mdFiles) ? null : $this->defaultDocument('md');
+        $room     = max(0, Authorisation::MAX_FILES - $existing);
 
         $this->validate([
-            "signing.$role.name"    => ['required', 'string', 'max:255'],
-            "signing.$role.email"   => ['required', 'email', 'max:255'],
-            "signing.$role.message" => ['nullable', 'string', 'max:3000'],
-            "requestFile.$role"     => [$hasFile ? 'nullable' : 'required', 'file', 'mimes:'.Authorisation::REQUEST_MIMES, 'max:'.Authorisation::MAX_KB],
+            'signing.md.name'    => ['required', 'string', 'max:255'],
+            'signing.md.email'   => ['required', 'email', 'max:255'],
+            'signing.md.message' => ['nullable', 'string', 'max:3000'],
+            'mdFiles'            => [($existing || $default) ? 'nullable' : 'required', 'array', 'max:'.$room],
+            'mdFiles.*'          => ['file', 'mimes:'.Authorisation::REQUEST_MIMES, 'max:'.Authorisation::MAX_KB],
         ], [
-            "requestFile.$role.required" => 'Attach the Grant Agreement to be signed.',
-            "requestFile.$role.mimes"    => 'Attach a PDF or Word document.',
-            "requestFile.$role.max"      => 'The document must be '.(Authorisation::MAX_KB / 1024).' MB or smaller.',
+            'mdFiles.required' => 'Attach the documents for the Managing Director to review.',
+            'mdFiles.max'      => 'You can attach up to '.Authorisation::MAX_FILES.' documents ('.$room.' more).',
+            'mdFiles.*.mimes'  => 'Attach PDF, Word, Excel, PowerPoint or image files.',
+            'mdFiles.*.max'    => 'Each document must be '.(Authorisation::MAX_KB / 1024).' MB or smaller.',
         ], [
-            "signing.$role.name" => 'name', "signing.$role.email" => 'e-mail address', "signing.$role.message" => 'note',
+            'signing.md.name' => 'name', 'signing.md.email' => 'e-mail address', 'signing.md.message' => 'note',
         ]);
 
-        $a = $this->persist();
-        $s = $this->signing[$role];
+        $a     = $this->persist();
+        $added = $this->storeFiles($a, AuthorisationDocument::KIND_MD_SENT, $this->mdFiles);
 
-        if ($file = $this->requestFile[$role] ?? null) {
-            if ($a->{"{$role}_request_path"}) {
-                Storage::disk(Authorisation::DISK)->delete($a->{"{$role}_request_path"});
-            }
-            $a->forceFill([
-                "{$role}_request_path" => $file->store("authorisations/{$a->id}", Authorisation::DISK),
-                "{$role}_request_name" => $file->getClientOriginalName(),
-            ]);
-        } elseif (! $a->{"{$role}_request_path"} && ($default = $this->defaultDocument($role, $a))) {
-            // No upload: send the Gate 4 Draft Grant Agreement (MD) / the agreement the MD signed (PS) — a copy is kept with this round
+        if (! $existing && ! $added && $default) {
+            // Nothing attached: send the Gate 4 Draft Grant Agreement — a copy is kept with this round
             [$disk, $path, $name] = $default;
             $copy = "authorisations/{$a->id}/".Str::random(8).'-'.basename($path);
             Storage::disk(Authorisation::DISK)->put($copy, Storage::disk($disk)->get($path));
-            $a->forceFill(["{$role}_request_path" => $copy, "{$role}_request_name" => $name]);
+            AuthorisationDocument::create([
+                'authorisation_id' => $a->id, 'kind' => AuthorisationDocument::KIND_MD_SENT, 'path' => $copy, 'name' => $name,
+                'size' => Storage::disk(Authorisation::DISK)->size($copy), 'uploaded_by' => auth()->id(),
+            ]);
         }
 
+        $s     = $this->signing['md'];
+        $first = $a->md_sent_at === null;
         $a->forceFill([
-            "{$role}_signer_name"     => trim($s['name']),
-            "{$role}_signer_email"    => trim($s['email']),
-            "{$role}_request_message" => trim((string) $s['message']) ?: null,
-            "{$role}_sent_at"         => now(),
-            "{$role}_sent_by"         => auth()->id(),
+            'md_signer_name'     => trim($s['name']),
+            'md_signer_email'    => trim($s['email']),
+            'md_request_message' => trim((string) $s['message']) ?: null,
+            'md_sent_at'         => $a->md_sent_at ?? now(),
+            'md_sent_by'         => $a->md_sent_by ?? auth()->id(),
         ])->save();
 
-        unset($this->requestFile[$role], $this->auth);
-        $this->dispatch('notify', type: 'success', message: 'Recorded as sent to '.$a->{"{$role}_signer_name"}.' for signing. Download the Grant Agreement and send it to them.');
+        $this->mdFiles = [];
+        $this->pickKey++;
+        unset($this->auth, $this->mdDocs);
+        $this->dispatch('notify', type: 'success', message: $first
+            ? 'Recorded as sent to '.$a->md_signer_name.' for review. Download the documents and send them to the Managing Director.'
+            : 'Updated.'.($added ? ' '.$added.' '.Str::plural('document', $added).' added.' : ''));
     }
 
-    /**
-     * The document to send when nothing is uploaded: [disk, path, name] or null.
-     *   md → the Draft Grant Agreement from Gate 4 · ps → the Grant Agreement signed by the Managing Director
-     */
-    public function defaultDocument(string $role, ?Authorisation $a = null): ?array
+    /** A file (or several) was picked for the MD → add it to the list; nothing is saved until "Save & mark as sent" */
+    public function updatedMdPick(): void
     {
-        $a ??= $this->authId ? Authorisation::find($this->authId) : null;
+        abort_unless($this->canMd, 403);
 
+        $room = max(0, Authorisation::MAX_FILES - $this->mdDocs->count() - count($this->mdFiles));
+
+        $this->validate([
+            'mdPick'   => ['array', 'max:'.$room],
+            'mdPick.*' => ['file', 'mimes:'.Authorisation::REQUEST_MIMES, 'max:'.Authorisation::MAX_KB],
+        ], [
+            'mdPick.max'     => $room ? 'You can add '.$room.' more '.Str::plural('document', $room).' (up to '.Authorisation::MAX_FILES.').' : 'The limit of '.Authorisation::MAX_FILES.' documents is reached.',
+            'mdPick.*.mimes' => 'Attach PDF, Word, Excel, PowerPoint or image files.',
+            'mdPick.*.max'   => 'Each document must be '.(Authorisation::MAX_KB / 1024).' MB or smaller.',
+        ]);
+
+        // Skip a file that is already in the list (same name and size)
+        $have = collect($this->mdFiles)->map(fn ($f) => $f->getClientOriginalName().'|'.$f->getSize());
+        foreach ($this->mdPick as $file) {
+            if ($file && ! $have->contains($file->getClientOriginalName().'|'.$file->getSize())) {
+                $this->mdFiles[] = $file;
+            }
+        }
+
+        $this->mdPick = [];
+        $this->pickKey++;
+        $this->resetValidation(['mdFiles', 'mdFiles.*']);
+    }
+
+    /** Take a picked file off the list before it is saved */
+    public function removePicked(int $i): void
+    {
+        abort_unless($this->canMd, 403);
+
+        if (isset($this->mdFiles[$i])) {
+            try { $this->mdFiles[$i]->delete(); } catch (\Throwable) { /* temporary file already gone */ }
+            unset($this->mdFiles[$i]);
+            $this->mdFiles = array_values($this->mdFiles);
+        }
+    }
+
+    /** The document sent when nothing is attached: [disk, path, name] or null — the Draft Grant Agreement from Gate 4 (MD only) */
+    public function defaultDocument(string $role = 'md', ?Authorisation $a = null): ?array
+    {
         if ($role === 'md' && ($gr = $this->readiness) && $gr->agreement_path && Storage::disk(GrantReadiness::DISK)->exists($gr->agreement_path)) {
             return [GrantReadiness::DISK, $gr->agreement_path, $gr->agreement_name ?: 'Draft Grant Agreement'];
-        }
-        if ($role === 'ps' && $a?->md_signed_path && Storage::disk(Authorisation::DISK)->exists($a->md_signed_path)) {
-            return [Authorisation::DISK, $a->md_signed_path, 'MD-signed '.($a->md_signed_name ?: 'Grant Agreement')];
         }
 
         return null;
     }
 
-    /** The signed copy came back → upload it (saved straight away) */
-    public function updatedSignedFile($file, string $role): void
+    /** 2 · The documents signed by the Principal Secretary came back by e-mail → upload them (saved straight away) */
+    public function updatedPsFiles(): void
     {
-        abort_unless(in_array($role, ['md', 'ps'], true) && $this->canRole($role), 403);
+        abort_unless($this->canPs, 403);
 
-        $this->validate(
-            ["signedFile.$role" => ['required', 'file', 'mimes:'.Authorisation::SIGNED_MIMES, 'max:'.Authorisation::MAX_KB]],
-            ["signedFile.$role.mimes" => 'Upload a PDF or a scan / photo (JPG, PNG).', "signedFile.$role.max" => 'The file must be '.(Authorisation::MAX_KB / 1024).' MB or smaller.'],
-        );
+        $room = max(0, Authorisation::MAX_FILES - $this->psDocs->count());
 
-        $a = $this->persist();
-        if ($a->{"{$role}_signed_path"}) {
-            Storage::disk(Authorisation::DISK)->delete($a->{"{$role}_signed_path"});
+        $this->validate([
+            'psFiles'   => ['array', 'max:'.$room],
+            'psFiles.*' => ['file', 'mimes:'.Authorisation::SIGNED_MIMES, 'max:'.Authorisation::MAX_KB],
+        ], [
+            'psFiles.max'     => 'You can upload up to '.Authorisation::MAX_FILES.' signed documents ('.$room.' more).',
+            'psFiles.*.mimes' => 'Upload PDF or Word files, or clear scans / photos (JPG, PNG).',
+            'psFiles.*.max'   => 'Each file must be '.(Authorisation::MAX_KB / 1024).' MB or smaller.',
+        ]);
+
+        $n = $this->storeFiles($this->persist(), AuthorisationDocument::KIND_PS_SIGNED, $this->psFiles);
+
+        $this->psFiles = [];
+        $this->pickKey++;
+        unset($this->auth, $this->psDocs);
+        if ($n) {
+            $this->dispatch('notify', type: 'success', message: $n.' signed '.Str::plural('document', $n).' uploaded.');
         }
-        $a->forceFill([
-            "{$role}_signed_path"        => $file->store("authorisations/{$a->id}", Authorisation::DISK),
-            "{$role}_signed_name"        => $file->getClientOriginalName(),
-            "{$role}_signed_size"        => $file->getSize(),
-            "{$role}_signed_at"          => now(),
-            "{$role}_signed_uploaded_by" => auth()->id(),
-            // If it was sent outside the system, keep at least who signed
-            "{$role}_signer_name"        => $a->{"{$role}_signer_name"} ?: (trim($this->signing[$role]['name'] ?? '') ?: null),
-        ])->save();
-
-        unset($this->signedFile[$role], $this->auth);
-        $this->dispatch('notify', type: 'success', message: 'Signed copy uploaded. Now record the decision written on it.');
     }
 
-    public function removeSigned(string $role): void
+    /** Remove one document (while its step is still open) */
+    public function removeDocument(int $id): void
     {
-        abort_unless($this->canRole($role) && $this->authId, 403);
+        abort_unless($this->authId, 403);
 
+        $d = AuthorisationDocument::where('authorisation_id', $this->authId)->findOrFail($id);
+        abort_unless($this->canRole($d->kind === AuthorisationDocument::KIND_MD_SENT ? 'md' : 'ps'), 403);
+
+        // Forget the old single-file columns that point at the same file, so the file can be deleted
         $a = Authorisation::findOrFail($this->authId);
-        if ($a->{"{$role}_signed_path"}) {
-            Storage::disk(Authorisation::DISK)->delete($a->{"{$role}_signed_path"});
+        foreach (['md_request', 'ps_signed'] as $col) {
+            if ($a->{"{$col}_path"} === $d->path) {
+                $a->forceFill(["{$col}_path" => null, "{$col}_name" => null])->save();
+            }
         }
-        $a->forceFill(["{$role}_signed_path" => null, "{$role}_signed_name" => null, "{$role}_signed_size" => null, "{$role}_signed_at" => null, "{$role}_signed_uploaded_by" => null])->save();
-        unset($this->auth);
+
+        $d->delete();
+        unset($this->auth, $this->mdDocs, $this->psDocs);
+    }
+
+    /** @param \Livewire\Features\SupportFileUploads\TemporaryUploadedFile[] $files */
+    protected function storeFiles(Authorisation $a, string $kind, array $files): int
+    {
+        $n = 0;
+        foreach ($files as $file) {
+            if (! $file) {
+                continue;
+            }
+            AuthorisationDocument::create([
+                'authorisation_id' => $a->id,
+                'kind'             => $kind,
+                'path'             => $file->store("authorisations/{$a->id}", Authorisation::DISK),
+                'name'             => $file->getClientOriginalName(),
+                'size'             => $file->getSize(),
+                'uploaded_by'      => auth()->id(),
+            ]);
+            $n++;
+        }
+
+        return $n;
     }
 
     /* =====================================================================
@@ -420,25 +510,24 @@ new class extends Component
 
         $this->validate([
             'md.decision'           => ['required', Rule::in(array_keys(Authorisation::MD_DECISIONS))],
-            'md.comments'           => ['required', 'string', 'max:5000'],
+            'md.comments'           => ['nullable', 'string', 'max:5000'],
             'md.on'                 => ['required', 'date', 'before_or_equal:today'],
             'conditions.*.finding'  => ['required', 'string', 'max:250'],
             'conditions.*.type'     => ['nullable', Rule::in(array_keys(Authorisation::CONDITION_TYPES))],
         ], [
             'md.decision.required'          => 'Choose a decision.',
-            'md.comments.required'          => 'Record the basis for the decision.',
             'conditions.*.finding.required' => 'Describe the condition (or remove it).',
         ]);
 
         $decision = $this->md['decision'];
 
-        if (! $this->auth?->hasSignedCopy('md')) {
-            $this->addError('md.decision', 'Upload the signed copy from the Managing Director first (step 2).');
+        if (! $this->auth?->sentForSigning('md') || $this->mdDocs->isEmpty()) {
+            $this->addError('md.decision', 'Send the documents to the Managing Director for review first (step 1).');
             return;
         }
 
         if ($decision === 'approve' && $this->blockers) {
-            $this->addError('md.decision', 'Not ready to sign — see the list above.');
+            $this->addError('md.decision', 'Not ready to forward — see the list above.');
             return;
         }
 
@@ -457,49 +546,53 @@ new class extends Component
         $notes = $this->emailDecision('md');
 
         $this->afterDecision(($decision === 'approve'
-            ? 'Signed by the Managing Director and forwarded to the MTIBD Principal Secretary.'
+            ? 'Managing Director satisfied. Forward the documents to the MTIBD Principal Secretary by e-mail, then upload the signed documents here.'
             : 'Managing Director decision recorded: '.Authorisation::MD_DECISIONS[$decision][0].'.').' '.$notes);
     }
 
     /* =====================================================================
-     | §3.5.3 Principal Secretary final authorisation
+     | §3.5.3 Principal Secretary signature — recorded from the signed documents
      ===================================================================== */
 
     public function recordPs(): void
     {
-        abort_unless($this->canPs, 403, 'Final authorisation is not open.');
+        abort_unless($this->canPs, 403, 'The Principal Secretary signature is not open.');
 
         $this->validate([
-            'ps.decision' => ['required', Rule::in(array_keys(Authorisation::PS_DECISIONS))],
-            'ps.comments' => [($this->ps['decision'] ?? null) === 'authorise' ? 'nullable' : 'required', 'string', 'max:5000'],
-            'ps.on'       => ['required', 'date', 'before_or_equal:today'],
+            'signing.ps.name'  => ['required', 'string', 'max:255'],
+            'signing.ps.email' => ['nullable', 'email', 'max:255'],
+            'ps.on'            => ['required', 'date', 'before_or_equal:today'],
+            'ps.comments'      => ['nullable', 'string', 'max:5000'],
         ], [
-            'ps.decision.required' => 'Choose a decision.',
-            'ps.comments.required' => ($this->ps['decision'] ?? null) === 'clarify' ? 'Say what must be clarified or corrected.' : 'Record why the agreement is not signed.',
+            'signing.ps.name.required' => 'Enter the name of the Principal Secretary who signed.',
+            'ps.on.required'           => 'Enter the date the documents were signed.',
+        ], [
+            'signing.ps.name' => 'name', 'signing.ps.email' => 'e-mail address', 'ps.on' => 'date signed', 'ps.comments' => 'note',
         ]);
 
-        if (! $this->auth?->hasSignedCopy('ps')) {
-            $this->addError('ps.decision', 'Upload the signed copy from the Principal Secretary first (step 2).');
+        if ($this->psDocs->isEmpty()) {
+            $this->addError('psFiles', 'Upload the documents signed by the Principal Secretary first.');
             return;
         }
 
-        $outcome = [
-            'authorise' => Authorisation::OUTCOME_AUTHORISED,
-            'clarify'   => Authorisation::OUTCOME_CLARIFICATION,
-            'decline'   => Authorisation::OUTCOME_NOT_AUTHORISED,
-        ][$this->ps['decision']];
+        $this->ps['decision'] = 'authorise';
 
-        DB::transaction(function () use ($outcome) {
+        DB::transaction(function () {
             $this->persist(updateEoi: false)->update([
-                'ps_by' => auth()->id(), 'ps_decided_at' => now(), 'outcome' => $outcome, 'decided_at' => now(),
+                'ps_signer_name'  => trim($this->signing['ps']['name']),
+                'ps_signer_email' => trim((string) ($this->signing['ps']['email'] ?? '')) ?: null,
+                'ps_by'           => auth()->id(),
+                'ps_decided_at'   => now(),
+                'outcome'         => Authorisation::OUTCOME_AUTHORISED,
+                'decided_at'      => now(),
             ]);
-            $this->eoi->update(['status' => Authorisation::OUTCOME_TO_EOI_STATUS[$outcome]]);
+            $this->eoi->update(['status' => Authorisation::OUTCOME_TO_EOI_STATUS[Authorisation::OUTCOME_AUTHORISED]]);
         });
 
         // E-mails (after the decision is saved)
         $notes = $this->emailDecision('ps');
 
-        $this->afterDecision('Gate 5 outcome recorded: '.Authorisation::OUTCOMES[$outcome][0].'. '.$notes);
+        $this->afterDecision('Signed by the Principal Secretary — the grant is formally approved and handed over to Gate 6. '.$notes);
     }
 
     /* =====================================================================
@@ -516,7 +609,7 @@ new class extends Component
         $backTo = $old->heldBy();   // 'ps' → the Managing Director's approval stands
 
         DB::transaction(function () use ($old, $backTo) {
-            Authorisation::create([
+            $new = Authorisation::create([
                 'expression_of_interest_id' => $this->eoiId,
                 'committee_review_id'       => $old->committee_review_id,
                 'round'                     => $old->round + 1,
@@ -538,6 +631,11 @@ new class extends Component
                 'md_signed_at' => $old->md_signed_at, 'md_signed_uploaded_by' => $old->md_signed_uploaded_by,
             ] : []));
 
+            // Start from the documents sent last time — the PMU can remove, add and re-send them (same files, shared)
+            foreach ($old->mdDocuments()->get() as $d) {
+                AuthorisationDocument::create(['authorisation_id' => $new->id] + $d->only('kind', 'path', 'name', 'size', 'uploaded_by'));
+            }
+
             $this->eoi->update(['status' => ExpressionOfInterest::STATUS_AUTHORISATION]);
         });
 
@@ -547,7 +645,9 @@ new class extends Component
         unset($this->isOpen, $this->canMd, $this->canPs, $this->canResubmit);
 
         $this->dispatch('gate-decided', gate: 'g4', decision: null);
-        $this->dispatch('notify', type: 'success', message: 'Resubmitted to the '.($backTo === 'ps' ? 'Principal Secretary' : 'Managing Director')." — round {$this->round}.");
+        $this->dispatch('notify', type: 'success', message: ($backTo === 'ps'
+            ? 'Resubmitted for the Principal Secretary\'s signature'
+            : 'Resubmitted to the Managing Director — check the documents and send them again')." (round {$this->round}).");
     }
 
     /* =====================================================================
@@ -696,6 +796,9 @@ new class extends Component
     $instrument = $a?->instrument ?? $this->dd?->instrument;
     $mdDone     = $a?->md_decided_at !== null;
     $psDone     = $a?->ps_decided_at !== null;
+    $mdSent     = (bool) $a?->sentForSigning('md');
+    $mdDocs     = $this->mdDocs;
+    $psDocs     = $this->psDocs;
     $openConds  = collect($conditions)->where('status', 'open')->count();
 
     // Path: done | current | failed | returned | todo
@@ -714,7 +817,7 @@ new class extends Component
     };
     $path = [
         ['Gate 4 · Grant readiness', $this->readiness ? 'done' : ($this->readinessOk ? 'done' : 'current')],
-        ['Managing Director signature', $mdState],
+        ['Managing Director review', $mdState],
         ['Principal Secretary signature', $psState],
         ['Gate 6 · Conditions precedent & onboarding', $outcome === 'authorised' ? 'current' : 'todo'],
     ];
@@ -724,7 +827,7 @@ new class extends Component
         $decided            => [$A::OUTCOMES[$outcome][0], $A::OUTCOMES[$outcome][4], $A::OUTCOMES[$outcome][3]],
         ! $this->readinessOk => ['Waiting for Gate 4', 'pill-muted', 'bi-lock'],
         $stage === 'ps'     => ['Awaiting Principal Secretary signature', 'pill-warn', 'bi-hourglass-split'],
-        default             => ['Awaiting Managing Director signature', 'pill-warn', 'bi-hourglass-split'],
+        default             => [$mdSent ? 'With the Managing Director for review' : 'Send to the Managing Director', 'pill-warn', 'bi-hourglass-split'],
     };
 @endphp
 
@@ -739,7 +842,7 @@ new class extends Component
             <span class="pill pill-muted"><i class="bi bi-lock-fill"></i> Locked</span>
         </div>
         <p class="small text-muted mb-0">Opens once Gate 4 · Grant readiness is approved by the PMU Director of Implementation.
-            The Grant Agreement is then signed by the CAFI Managing Director and, after that, by the MTIBD Principal Secretary — both signatures constitute formal approval of the grant.</p>
+            The documents are then reviewed by the CAFI Managing Director and, once the Managing Director is satisfied, signed by the MTIBD Principal Secretary — the Principal Secretary's signature constitutes formal approval of the grant.</p>
     </section>
 
 {{-- ======================================================================
@@ -753,8 +856,8 @@ new class extends Component
             <span class="pill {{ $decided ? $A::OUTCOMES[$outcome][4] : 'pill-warn' }}"><i class="bi {{ $decided ? $A::OUTCOMES[$outcome][3] : 'bi-hourglass-split' }}"></i> {{ $decided ? $A::OUTCOMES[$outcome][0] : 'In progress' }}</span>
         </div>
         <p class="small text-muted mb-0">
-            @if (! $decided) Your Grant Agreement is with CAFI management for signature.
-            @elseif ($outcome === 'authorised') Your grant has been formally approved — the Grant Agreement has been signed by the CAFI Managing Director and the MTIBD Principal Secretary. The next step is meeting the conditions precedent and onboarding. Approval does not itself trigger payment.
+            @if (! $decided) Your Grant Agreement is with CAFI management for review and signature.
+            @elseif ($outcome === 'authorised') Your grant has been formally approved — the Grant Agreement has been reviewed by the CAFI Managing Director and signed by the MTIBD Principal Secretary. The next step is meeting the conditions precedent and onboarding. Approval does not itself trigger payment.
             @elseif ($outcome === 'clarification') Further information is being prepared before authorisation can be completed. The LEHSFF team will contact you if anything is needed from you.
             @else Your grant was not approved and will not proceed further.
             @endif
@@ -789,7 +892,7 @@ new class extends Component
             <span class="section-no">G5</span>
             <div class="me-auto">
                 <h5>Final authorisation @if ($round > 1) <span class="pill pill-muted ms-1">Round {{ $round }}</span> @endif</h5>
-                <div class="small text-muted">Formal approval of the grant through the sequential signing of the Grant Agreement by the CAFI Managing Director and the MTIBD Principal Secretary.</div>
+                <div class="small text-muted">Review of the documents by the CAFI Managing Director, then signature of the Grant Agreement by the MTIBD Principal Secretary (formal approval).</div>
             </div>
             <span class="pill {{ $headPill[1] }}"><i class="bi {{ $headPill[2] }}"></i> {{ $headPill[0] }}</span>
         </div>
@@ -800,7 +903,7 @@ new class extends Component
                 <span wire:loading class="ms-1"><span class="spinner-border spinner-border-sm"></span></span>
             </div>
         @elseif (! $decided && $eoi->status === 'authorisation' && ! auth()->user()->canAny(['gate4.md', 'gate4.ps', 'gate2.assess']))
-            <div class="small text-muted mb-3"><i class="bi bi-eye me-1"></i> Read-only — the PMU sends the Grant Agreement for signing and records the signed decisions.</div>
+            <div class="small text-muted mb-3"><i class="bi bi-eye me-1"></i> Read-only — the PMU sends the documents for review and signature and records the outcome.</div>
         @endif
 
         @if (! $this->readinessOk && ! $decided)
@@ -812,10 +915,11 @@ new class extends Component
 
         <div class="callout small mb-3">
             <i class="bi bi-envelope-paper me-1"></i>
-            The Managing Director and the Principal Secretary sign the Grant Agreement outside the system: for each of them, <strong>1</strong> send them the agreement yourself
-            (the Gate 4 Draft Grant Agreement is used for the MD, and the MD-signed copy for the PS, unless you attach another file), <strong>2</strong> upload the signed copy when it comes back,
-            <strong>3</strong> record the decision written on it. The Principal Secretary's step opens once the Managing Director has signed.
-            Recording a decision e-mails the PMU (and, on a final outcome, the applicant, the Committee and Finance).
+            Both steps happen outside the system — nobody needs to log in.
+            <strong>1</strong> Send the documents to the <strong>CAFI Managing Director</strong> for review yourself (attach as many as needed) and record the outcome of the review.
+            <strong>2</strong> When the Managing Director is satisfied, forward the documents to the <strong>MTIBD Principal Secretary</strong> by e-mail for signature,
+            then upload the signed documents here to complete the authorisation.
+            Recording an outcome e-mails the PMU (and, on a final outcome, the applicant, the Committee and Finance).
         </div>
 
         @if ($a?->resubmission_note)
@@ -844,7 +948,7 @@ new class extends Component
             <div><dt>Approved CAFI grant</dt><dd>{{ $m($grant) }} <div class="small text-muted">{{ $u($grant) }}</div></dd></div>
             <div><dt>Instrument</dt><dd>{{ $DD::INSTRUMENTS[$instrument ?? ''] ?? '—' }}</dd></div>
             <div><dt>Outstanding actions</dt><dd>{{ $openConds ? $openConds.' open '.\Illuminate\Support\Str::plural('condition', $openConds) : 'None' }} <a href="#g4-conditions" class="small ms-1">See conditions</a></dd></div>
-            <div><dt>Authorised next stage</dt><dd class="{{ $outcome ? '' : 'text-faint' }}">{{ $a?->nextStage() ?? 'Managing Director signature' }}</dd></div>
+            <div><dt>Authorised next stage</dt><dd class="{{ $outcome ? '' : 'text-faint' }}">{{ $a?->nextStage() ?? 'Managing Director review' }}</dd></div>
         </div>
 
         <div class="callout small mt-3 mb-0">
@@ -864,7 +968,7 @@ new class extends Component
             <span class="section-no"><i class="bi bi-folder2-open"></i></span>
             <div class="me-auto">
                 <h5>Transaction file</h5>
-                <div class="small text-muted">What the signing authorities receive: the Grant Readiness Memo, the Draft Grant Agreement, the Committee recommendation and supporting documents.</div>
+                <div class="small text-muted">What you can send to the Managing Director: the Grant Readiness Memo, the Draft Grant Agreement, the Committee recommendation and supporting documents.</div>
             </div>
             <span class="pill {{ $included === count($file) ? 'pill-ok' : 'pill-warn' }}">{{ $included }} / {{ count($file) }} included</span>
         </div>
@@ -895,30 +999,116 @@ new class extends Component
         <div class="section-card-head">
             <span class="section-no">1</span>
             <div class="me-auto">
-                <h5>CAFI Managing Director review and signature</h5>
+                <h5>CAFI Managing Director review</h5>
                 <div class="small text-muted">
-                    @if ($mdDone) Signed by {{ $a->signerName('md') }} on {{ $a->md_on?->format('d M Y') }} · recorded by {{ $a->managingDirector?->name ?? '—' }} on {{ $a->md_decided_at->format('d M Y H:i') }}.
-                    @else Send the Grant Agreement for signing, upload the signed copy, then record what the Managing Director decided. @endif
+                    @if ($mdDone) Reviewed by {{ $a->signerName('md') }} on {{ $a->md_on?->format('d M Y') }} · recorded by {{ $a->managingDirector?->name ?? '—' }} on {{ $a->md_decided_at->format('d M Y H:i') }}.
+                    @else Send the documents to the Managing Director for review, then record the outcome. The Managing Director reviews only — the Principal Secretary signs. @endif
                 </div>
             </div>
             @if ($mdDone)
                 @php [$mdL, , $mdI] = $A::MD_DECISIONS[$a->md_decision]; @endphp
                 <span class="pill {{ ['approve' => 'pill-ok', 'return' => 'pill-warn', 'decline' => 'pill-danger'][$a->md_decision] }}"><i class="bi {{ $mdI }}"></i> {{ $mdL }}</span>
-            @else
+            @elseif ($mdSent)
                 <span class="pill pill-warn"><i class="bi bi-hourglass-split"></i> In review</span>
+            @else
+                <span class="pill pill-muted"><i class="bi bi-envelope"></i> Not sent</span>
             @endif
         </div>
 
-        @include('expression-of-interest.authorisation.partials.signing', ['role' => 'md', 'a' => $a, 'can' => $canMd, 'signing' => $signing, 'decidedRole' => $mdDone, 'defaultDoc' => $canMd ? $this->defaultDocument('md', $a) : null])
+        {{-- ---------- Step 1 · send the documents ---------- --}}
+        <div class="border rounded-3 p-3 mb-3 bg-light">
+            <div class="d-flex align-items-center gap-2 mb-2">
+                <span class="pill {{ $mdSent ? 'pill-ok' : 'pill-warn' }}"><i class="bi {{ $mdSent ? 'bi-envelope-check' : 'bi-envelope' }}"></i> 1</span>
+                <span class="fw-semibold text-navy small">Send the documents to the Managing Director for review</span>
+            </div>
 
-        @if ($canMd && ! $a?->hasSignedCopy('md'))
-            <div class="small text-muted mb-2"><i class="bi bi-info-circle me-1"></i> You can fill in step 3 while waiting; the decision can only be recorded once the signed copy is uploaded.</div>
-        @endif
+            @if ($mdSent)
+                <div class="small mb-2">
+                    Sent to <strong>{{ $a->md_signer_name }}</strong> ({{ $a->md_signer_email }}) on {{ $a->md_sent_at->format('d M Y') }}@if ($a->mdSender) by {{ $a->mdSender->name }}@endif.
+                    @if ($a->md_request_message) <div class="text-muted mt-1"><i class="bi bi-chat-left-text me-1"></i>{{ $a->md_request_message }}</div> @endif
+                </div>
+            @elseif (! $canMd)
+                <div class="small text-muted mb-2">Not sent yet.</div>
+            @endif
 
-        <div class="d-flex align-items-center gap-2 mb-2">
-            <span class="pill {{ $mdDone ? 'pill-ok' : 'pill-warn' }}">3</span>
-            <span class="fw-semibold text-navy small">Record the Managing Director's decision, as written on the signed document</span>
+            @include('expression-of-interest.authorisation.partials.documents', ['docs' => $mdDocs, 'canRemove' => $canMd, 'empty' => $canMd ? null : 'No documents.'])
+
+            @if ($canMd)
+                @php $mdDefault = $mdDocs->isEmpty() ? $this->defaultDocument('md') : null; @endphp
+                <div class="row g-2 mt-1">
+                    <div class="col-md-6">
+                        <label class="form-label small fw-semibold mb-1">Managing Director's name <span class="req">*</span></label>
+                        <input type="text" class="form-control form-control-sm @error('signing.md.name') is-invalid @enderror" wire:model="signing.md.name" placeholder="{{ $A::AUTHORITIES['md'][0] }}">
+                        @error('signing.md.name') <div class="invalid-feedback">{{ $message }}</div> @enderror
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label small fw-semibold mb-1">E-mail <span class="req">*</span></label>
+                        <input type="email" class="form-control form-control-sm @error('signing.md.email') is-invalid @enderror" wire:model="signing.md.email">
+                        @error('signing.md.email') <div class="invalid-feedback">{{ $message }}</div> @enderror
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label small fw-semibold mb-1">
+                            {{ $mdDocs->isEmpty() ? 'Documents for review' : 'Add more documents' }}
+                            @if ($mdDocs->isEmpty() && ! $mdDefault) <span class="req">*</span> @endif
+                        </label>
+
+                        {{-- Picked, not saved yet --}}
+                        @if (count($mdFiles))
+                            <div class="mb-2">
+                                @foreach ($mdFiles as $i => $f)
+                                    <div class="file-row" wire:key="md-picked-{{ $i }}-{{ $f->getFilename() }}">
+                                        <span class="file-row-icon"><i class="bi bi-file-earmark-plus"></i></span>
+                                        <div class="flex-grow-1 small overflow-hidden">
+                                            <div class="fw-semibold text-navy text-truncate">{{ $f->getClientOriginalName() }}</div>
+                                            <div class="text-muted">{{ number_format(max(1, $f->getSize() / 1024)) }} KB · not saved yet</div>
+                                        </div>
+                                        <button type="button" class="btn btn-icon btn-icon-danger" title="Remove" wire:click="removePicked({{ $i }})"><i class="bi bi-x-lg"></i></button>
+                                    </div>
+                                @endforeach
+                            </div>
+                        @endif
+
+                        <div wire:key="md-pick-{{ $pickKey }}">
+                            <input type="file" multiple class="form-control form-control-sm @error('mdPick') is-invalid @enderror @error('mdPick.*') is-invalid @enderror @error('mdFiles') is-invalid @enderror"
+                                   wire:model="mdPick" accept=".pdf,.doc,.docx,.xls,.xlsx,.pptx,.jpg,.jpeg,.png">
+                        </div>
+                        <div class="form-text">
+                            <span wire:loading wire:target="mdPick"><span class="spinner-border spinner-border-sm me-1"></span> Uploading…</span>
+                            <span wire:loading.remove wire:target="mdPick">
+                                @if (count($mdFiles)) {{ count($mdFiles) }} {{ \Illuminate\Support\Str::plural('document', count($mdFiles)) }} ready — choose another file to add it, or save.
+                                @elseif ($mdDocs->isEmpty() && $mdDefault) Choose files one at a time (or several at once). Leave empty to send <strong>{{ $mdDefault[2] }}</strong> (the Draft Grant Agreement from Gate 4).
+                                @else Choose files one at a time (or several at once) — each is added to the list. PDF, Word, Excel, PowerPoint or images, up to {{ $A::MAX_KB / 1024 }} MB each. @endif
+                            </span>
+                        </div>
+                        @error('mdPick') <div class="invalid-feedback d-block">{{ $message }}</div> @enderror
+                        @error('mdPick.*') <div class="invalid-feedback d-block">{{ $message }}</div> @enderror
+                        @error('mdFiles') <div class="invalid-feedback d-block">{{ $message }}</div> @enderror
+                        @error('mdFiles.*') <div class="invalid-feedback d-block">{{ $message }}</div> @enderror
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label small fw-semibold mb-1">Note (optional)</label>
+                        <textarea rows="2" class="form-control form-control-sm" wire:model="signing.md.message" placeholder="e.g. e-mailed with the Grant Readiness Memo, follow up on Friday"></textarea>
+                    </div>
+                    <div class="col-12 d-flex">
+                        <button type="button" class="btn btn-sm {{ $mdSent ? 'btn-outline-secondary' : 'btn-brand' }} ms-auto" wire:click="sendToMd"
+                                wire:loading.attr="disabled" wire:target="sendToMd,mdPick">
+                            <span wire:loading.remove wire:target="sendToMd"><i class="bi bi-check2-square me-1"></i>{{ $mdSent ? (count($mdFiles) ? 'Save the added documents' : 'Save changes') : 'Save & mark as sent for review' }}</span>
+                            <span wire:loading wire:target="sendToMd"><span class="spinner-border spinner-border-sm me-1"></span> Saving…</span>
+                        </button>
+                    </div>
+                </div>
+            @endif
         </div>
+
+        {{-- ---------- Step 2 · record the review ---------- --}}
+        <div class="d-flex align-items-center gap-2 mb-2">
+            <span class="pill {{ $mdDone ? 'pill-ok' : 'pill-warn' }}">2</span>
+            <span class="fw-semibold text-navy small">Record the outcome of the Managing Director's review</span>
+        </div>
+
+        @if ($canMd && ! $mdSent)
+            <div class="small text-muted mb-2"><i class="bi bi-info-circle me-1"></i> You can fill this in while waiting; the outcome can be recorded once the documents have been sent (step 1).</div>
+        @endif
 
         <dt class="detail-label mb-2">The review confirms that</dt>
         <ul class="checklist mb-3">
@@ -936,15 +1126,15 @@ new class extends Component
         @if ($canMd)
             @if ($this->blockers)
                 <div class="callout callout-warning small mb-3">
-                    <div class="fw-semibold mb-1"><i class="bi bi-list-check me-1"></i> Before the Managing Director can sign ({{ count($this->blockers) }})</div>
+                    <div class="fw-semibold mb-1"><i class="bi bi-list-check me-1"></i> Before the documents can go to the Principal Secretary ({{ count($this->blockers) }})</div>
                     <ul class="evidence-list mb-0">@foreach ($this->blockers as $b) <li>{{ $b }}</li> @endforeach</ul>
                 </div>
             @else
-                <div class="callout callout-success small mb-3"><i class="bi bi-check2-circle me-1"></i> Ready to sign and forward to the Principal Secretary.</div>
+                <div class="callout callout-success small mb-3"><i class="bi bi-check2-circle me-1"></i> Ready to forward to the Principal Secretary for signature.</div>
             @endif
         @endif
 
-        <label class="form-label small fw-semibold">Decision @if ($canMd) <span class="req">*</span> @endif</label>
+        <label class="form-label small fw-semibold">Outcome of the review @if ($canMd) <span class="req">*</span> @endif</label>
         <div class="choice-group cols-3 @error('md.decision') is-invalid @enderror">
             @foreach ($A::MD_DECISIONS as $v => [$dLabel, $dDesc, $dIcon])
                 <label class="choice choice--card">
@@ -960,21 +1150,21 @@ new class extends Component
 
         <div class="row g-3 mt-1">
             <div class="col-12">
-                <label class="form-label small fw-semibold">Comments / rationale @if ($canMd) <span class="req">*</span> @endif</label>
+                <label class="form-label small fw-semibold">Comments / rationale <span class="text-muted fw-normal">(optional)</span></label>
                 @if ($canMd)
                     <textarea rows="3" class="form-control @error('md.comments') is-invalid @enderror" wire:model.blur="md.comments"
-                              placeholder="{{ ($md['decision'] ?? null) === 'return' ? 'What must be clarified or refined, and by whom' : 'Basis for the decision, and anything the Principal Secretary should note' }}"></textarea>
+                              placeholder="{{ ($md['decision'] ?? null) === 'return' ? 'What must be clarified or refined, and by whom' : 'Basis for the outcome, and anything the Principal Secretary should note' }}"></textarea>
                     @error('md.comments') <div class="invalid-feedback">{{ $message }}</div> @enderror
                 @else
                     <div class="quote mb-0">{{ $md['comments'] ?: 'No comments yet.' }}</div>
                 @endif
             </div>
             <div class="col-md-6">
-                <label class="form-label small fw-semibold">Signed by (Managing Director)</label>
+                <label class="form-label small fw-semibold">Reviewed by (Managing Director)</label>
                 <input type="text" class="form-control bg-light" readonly value="{{ $a?->md_signer_name ?: ($signing['md']['name'] ?? '') ?: '—' }}">
             </div>
             <div class="col-md-6">
-                <label class="form-label small fw-semibold">Date signed</label>
+                <label class="form-label small fw-semibold">Date of the review</label>
                 <input type="date" class="form-control @error('md.on') is-invalid @enderror" wire:model.blur="md.on" max="{{ now()->toDateString() }}" @disabled(! $canMd)>
                 @error('md.on') <div class="invalid-feedback">{{ $message }}</div> @enderror
             </div>
@@ -983,106 +1173,18 @@ new class extends Component
         @if ($canMd)
             <div class="d-flex flex-wrap gap-2 mt-4 pt-3 border-top">
                 <button type="button" class="btn btn-brand ms-auto" wire:click="recordMd" wire:loading.attr="disabled" wire:target="recordMd"
-                        wire:confirm="Record the Managing Director's signed decision? It can't be changed afterwards. The PMU will be e-mailed — and the applicant too if it is Not approve.">
-                    <span wire:loading.remove wire:target="recordMd"><i class="bi bi-send me-1"></i> Record Managing Director decision</span>
+                        wire:confirm="Record the outcome of the Managing Director's review? It can't be changed afterwards. The PMU will be e-mailed — and the applicant too if it is Not approve.">
+                    <span wire:loading.remove wire:target="recordMd"><i class="bi bi-send me-1"></i> Record review outcome</span>
                     <span wire:loading wire:target="recordMd"><span class="spinner-border spinner-border-sm me-1"></span> Recording…</span>
                 </button>
             </div>
         @endif
     </section>
 
-    {{-- ============================ 2 · PRINCIPAL SECRETARY AUTHORISATION (§3.5.3) ============================ --}}
-    <section class="section-card">
-        <div class="section-card-head">
-            <span class="section-no">2</span>
-            <div class="me-auto">
-                <h5>MTIBD Principal Secretary review and signature</h5>
-                <div class="small text-muted">
-                    @if ($psDone) Signed by {{ $a->signerName('ps') }} on {{ $a->ps_on?->format('d M Y') }} · recorded by {{ $a->principalSecretary?->name ?? '—' }} on {{ $a->ps_decided_at->format('d M Y H:i') }}.
-                    @else The second signature on the Grant Agreement — completing both signatures constitutes formal approval of the grant. @endif
-                </div>
-            </div>
-            @if ($psDone)
-                @php [$psL, , $psI] = $A::PS_DECISIONS[$a->ps_decision]; @endphp
-                <span class="pill {{ ['authorise' => 'pill-ok', 'clarify' => 'pill-warn', 'decline' => 'pill-danger'][$a->ps_decision] }}"><i class="bi {{ $psI }}"></i> {{ $psL }}</span>
-            @elseif ($stage === 'ps')
-                <span class="pill pill-warn"><i class="bi bi-hourglass-split"></i> Awaiting decision</span>
-            @else
-                <span class="pill pill-muted"><i class="bi bi-lock-fill"></i> Locked</span>
-            @endif
-        </div>
-
-        @if (! $psDone && $stage !== 'ps')
-            <div class="g1-locked">
-                <i class="bi bi-lock"></i>
-                <div>
-                    @if ($mdDone && $a->md_decision !== 'approve') Not reached — the Managing Director did not sign the Grant Agreement.
-                    @else Opens once the Managing Director has signed the Grant Agreement and forwarded it. The signatures are sequential. @endif
-                </div>
-            </div>
-        @else
-            @if ($mdDone && $a->md_comments)
-                <div class="quote mb-3">{{ $a->md_comments }}<div class="quote-meta">Managing Director ({{ $a->signerName('md') }}) · {{ $a->md_on?->format('d M Y') }}</div></div>
-            @endif
-
-            @include('expression-of-interest.authorisation.partials.signing', ['role' => 'ps', 'a' => $a, 'can' => $canPs, 'signing' => $signing, 'decidedRole' => $psDone, 'defaultDoc' => $canPs ? $this->defaultDocument('ps', $a) : null])
-
-            <div class="d-flex align-items-center gap-2 mb-2">
-                <span class="pill {{ $psDone ? 'pill-ok' : 'pill-warn' }}">3</span>
-                <span class="fw-semibold text-navy small">Record the Principal Secretary's decision, as written on the signed document</span>
-            </div>
-
-            <div class="choice-group cols-3 @error('ps.decision') is-invalid @enderror">
-                @foreach ($A::PS_DECISIONS as $v => [$dLabel, $dDesc, $dIcon])
-                    <label class="choice choice--card">
-                        <input type="radio" name="ps-decision" value="{{ $v }}" wire:model.live="ps.decision" @disabled(! $canPs)>
-                        <span class="choice-box">
-                            <span class="choice-icon"><i class="bi {{ $dIcon }}"></i></span>
-                            <span><span class="d-block fw-semibold">{{ $dLabel }}</span><span class="d-block small text-muted lh-sm mt-1">{{ $dDesc }}</span></span>
-                        </span>
-                    </label>
-                @endforeach
-            </div>
-            @error('ps.decision') <div class="text-danger small mt-1">{{ $message }}</div> @enderror
-
-            <div class="row g-3 mt-1">
-                <div class="col-12">
-                    <label class="form-label small fw-semibold">Comments @if ($canPs && ($ps['decision'] ?? null) && $ps['decision'] !== 'authorise') <span class="req">*</span> @endif</label>
-                    @if ($canPs)
-                        <textarea rows="3" class="form-control @error('ps.comments') is-invalid @enderror" wire:model.blur="ps.comments"
-                                  placeholder="{{ ($ps['decision'] ?? null) === 'clarify' ? 'What must be clarified or corrected' : (($ps['decision'] ?? null) === 'decline' ? 'Why the agreement is not signed' : 'Optional') }}"></textarea>
-                        @error('ps.comments') <div class="invalid-feedback">{{ $message }}</div> @enderror
-                    @else
-                        <div class="quote mb-0">{{ $ps['comments'] ?: 'No comments.' }}</div>
-                    @endif
-                </div>
-                <div class="col-md-6">
-                    <label class="form-label small fw-semibold">Signed by (Principal Secretary)</label>
-                    <input type="text" class="form-control bg-light" readonly value="{{ $a?->ps_signer_name ?: ($signing['ps']['name'] ?? '') ?: '—' }}">
-                </div>
-                <div class="col-md-6">
-                    <label class="form-label small fw-semibold">Date signed</label>
-                    <input type="date" class="form-control @error('ps.on') is-invalid @enderror" wire:model.blur="ps.on" max="{{ now()->toDateString() }}" @disabled(! $canPs)>
-                    @error('ps.on') <div class="invalid-feedback">{{ $message }}</div> @enderror
-                </div>
-            </div>
-
-            @if ($canPs)
-                <div class="d-flex flex-wrap gap-2 mt-4 pt-3 border-top">
-                    <button type="button" class="btn btn-brand ms-auto" wire:click="recordPs" wire:loading.attr="disabled" wire:target="recordPs"
-                            wire:confirm="Record the Principal Secretary's signed decision? It can't be changed afterwards. The PMU will be e-mailed — and, if authorised or declined, the applicant, the Committee and Finance too.">
-                        <span wire:loading.remove wire:target="recordPs"><i class="bi bi-patch-check me-1"></i> Record Principal Secretary decision</span>
-                        <span wire:loading wire:target="recordPs"><span class="spinner-border spinner-border-sm me-1"></span> Recording…</span>
-                    </button>
-                </div>
-            @endif
-        @endif
-    </section>
-
-    {{-- ============================ 3 · CONDITIONS (§3.5.4) ============================ --}}
+    {{-- ============================ 2 · CONDITIONS (§3.5.4) ============================ --}}
     <section class="section-card" id="g4-conditions">
         <div class="section-card-head">
-            <span class="section-no">3</span>
+            <span class="section-no">2</span>
             <div class="me-auto">
                 <h5>Conditions attached</h5>
                 <div class="small text-muted">Each condition is classified and assigned to the stage where it must be met — authorisation does not mean they are already satisfied.</div>
@@ -1151,19 +1253,90 @@ new class extends Component
         </details>
     </section>
 
-    {{-- ============================ 4 · OUTCOME & HANDOVER (§3.5.5 · §3.5.6) ============================ --}}
+    {{-- ============================ 3 · PRINCIPAL SECRETARY SIGNATURE, OUTCOME & HANDOVER (§3.5.3 · §3.5.5 · §3.5.6) ============================ --}}
     <section class="section-card">
         <div class="section-card-head">
-            <span class="section-no">4</span>
+            <span class="section-no">3</span>
             <div class="me-auto">
-                <h5>Gate 5 outcome &amp; handover</h5>
+                <h5>Principal Secretary signature &amp; handover</h5>
                 <div class="small text-muted">
                     @if ($decided) Round {{ $round }} closed on {{ $a->decided_at->format('d M Y H:i') }}.
-                    @else Recorded once both signatures are in — or as soon as either signatory returns the agreement or does not approve. @endif
+                    @else The PMU forwards the documents to the MTIBD Principal Secretary by e-mail and uploads the signed documents here. @endif
                 </div>
             </div>
-            @if ($decided) <span class="pill {{ $A::OUTCOMES[$outcome][4] }}"><i class="bi {{ $A::OUTCOMES[$outcome][3] }}"></i> {{ $A::OUTCOMES[$outcome][0] }}</span> @endif
+            @if ($decided) <span class="pill {{ $A::OUTCOMES[$outcome][4] }}"><i class="bi {{ $A::OUTCOMES[$outcome][3] }}"></i> {{ $A::OUTCOMES[$outcome][0] }}</span>
+            @elseif ($stage === 'ps') <span class="pill pill-warn"><i class="bi bi-hourglass-split"></i> Awaiting signature</span>
+            @else <span class="pill pill-muted"><i class="bi bi-lock-fill"></i> Locked</span> @endif
         </div>
+
+        @if (! $decided && $stage === 'ps')
+            {{-- ---------- Forward by e-mail, upload the signed documents ---------- --}}
+            <div class="callout small mb-3">
+                <i class="bi bi-envelope-arrow-up me-1"></i>
+                The Managing Director is satisfied. <strong>Forward the documents to the MTIBD Principal Secretary by e-mail</strong> for signature (outside the system).
+                When they come back signed, upload them below and record the signature.
+                @if ($mdDone && $a->md_comments) <div class="quote mt-2 mb-0">{{ $a->md_comments }}<div class="quote-meta">Managing Director ({{ $a->signerName('md') }}) · {{ $a->md_on?->format('d M Y') }}</div></div> @endif
+            </div>
+
+            @if ($mdDocs->isNotEmpty())
+                <dt class="detail-label mb-2">Documents to forward</dt>
+                @include('expression-of-interest.authorisation.partials.documents', ['docs' => $mdDocs, 'canRemove' => false, 'empty' => null])
+            @endif
+
+            <dt class="detail-label mt-3 mb-2">Signed documents from the Principal Secretary @if ($canPs) <span class="req">*</span> @endif</dt>
+            @include('expression-of-interest.authorisation.partials.documents', ['docs' => $psDocs, 'canRemove' => $canPs, 'empty' => 'No signed documents uploaded yet.'])
+
+            @if ($canPs)
+                <div class="mt-2">
+                    <span wire:loading wire:target="psFiles" class="small text-muted"><span class="spinner-border spinner-border-sm me-1"></span> Uploading…</span>
+                    <div wire:loading.remove wire:target="psFiles" wire:key="ps-pick-{{ $pickKey }}">
+                        <input type="file" multiple class="form-control form-control-sm @error('psFiles') is-invalid @enderror @error('psFiles.*') is-invalid @enderror"
+                               wire:model="psFiles" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png">
+                        <div class="form-text">Choose the signed files one at a time (or several at once) — the signed Grant Agreement and any signed annexes. Each file is saved and added to the list above as soon as it uploads; remove one with <i class="bi bi-trash"></i>. PDF, Word, or clear scans / photos, up to {{ $A::MAX_KB / 1024 }} MB each.</div>
+                        @error('psFiles') <div class="invalid-feedback d-block">{{ $message }}</div> @enderror
+                        @error('psFiles.*') <div class="invalid-feedback d-block">{{ $message }}</div> @enderror
+                    </div>
+                </div>
+
+                <div class="row g-3 mt-1">
+                    <div class="col-md-4">
+                        <label class="form-label small fw-semibold">Signed by (Principal Secretary) <span class="req">*</span></label>
+                        <input type="text" class="form-control @error('signing.ps.name') is-invalid @enderror" wire:model="signing.ps.name" placeholder="{{ $A::AUTHORITIES['ps'][0] }}">
+                        @error('signing.ps.name') <div class="invalid-feedback">{{ $message }}</div> @enderror
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label small fw-semibold">E-mail it was sent to</label>
+                        <input type="email" class="form-control @error('signing.ps.email') is-invalid @enderror" wire:model="signing.ps.email">
+                        @error('signing.ps.email') <div class="invalid-feedback">{{ $message }}</div> @enderror
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label small fw-semibold">Date signed <span class="req">*</span></label>
+                        <input type="date" class="form-control @error('ps.on') is-invalid @enderror" wire:model.blur="ps.on" max="{{ now()->toDateString() }}">
+                        @error('ps.on') <div class="invalid-feedback">{{ $message }}</div> @enderror
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label small fw-semibold">Note (optional)</label>
+                        <textarea rows="2" class="form-control @error('ps.comments') is-invalid @enderror" wire:model.blur="ps.comments" placeholder="Anything noted by the Principal Secretary"></textarea>
+                        @error('ps.comments') <div class="invalid-feedback">{{ $message }}</div> @enderror
+                    </div>
+                </div>
+
+                <div class="d-flex flex-wrap gap-2 mt-4 pt-3 border-top">
+                    <button type="button" class="btn btn-brand ms-auto" wire:click="recordPs" wire:loading.attr="disabled" wire:target="recordPs,psFiles"
+                            wire:confirm="Record the Principal Secretary's signature? The grant is formally approved and handed over to Gate 6. The applicant, PMU, Committee and Finance will be e-mailed.">
+                        <span wire:loading.remove wire:target="recordPs"><i class="bi bi-patch-check me-1"></i> Record signature — formally approve</span>
+                        <span wire:loading wire:target="recordPs"><span class="spinner-border spinner-border-sm me-1"></span> Recording…</span>
+                    </button>
+                </div>
+            @endif
+
+            <hr class="my-4">
+        @elseif (! $decided)
+            <div class="g1-locked mb-3">
+                <i class="bi bi-lock"></i>
+                <div>Opens once the Managing Director is satisfied with the documents. The PMU then forwards them to the Principal Secretary by e-mail and uploads the signed documents here.</div>
+            </div>
+        @endif
 
         <div class="row g-2 mb-3">
             @foreach ($A::OUTCOMES as $ok => [$oLabel, $oMeaning, $oNext, $oIcon, $oPill])
@@ -1180,21 +1353,33 @@ new class extends Component
         <dt class="detail-label mb-2">Decision record</dt>
         <div class="table-responsive">
             <table class="table table-modern table-sm align-middle mb-3">
-                <thead><tr><th>Authority</th><th>Decision</th><th>Date signed</th><th>Comments</th><th>Signed copy</th></tr></thead>
+                <thead><tr><th>Authority</th><th>Outcome</th><th>Date</th><th>Comments</th><th>Documents</th></tr></thead>
                 <tbody>
                     <tr>
-                        <td class="small fw-semibold text-navy">CAFI Managing Director <div class="text-muted fw-normal">{{ $a?->md_signer_name }}</div></td>
+                        <td class="small fw-semibold text-navy">CAFI Managing Director <div class="text-muted fw-normal">Review · {{ $a?->md_signer_name }}</div></td>
                         <td>@if ($mdDone)<span class="pill {{ ['approve' => 'pill-ok', 'return' => 'pill-warn', 'decline' => 'pill-danger'][$a->md_decision] }}">{{ $A::MD_DECISIONS[$a->md_decision][0] }}</span>@else<span class="pill pill-warn">Pending</span>@endif</td>
                         <td class="small {{ $mdDone ? '' : 'text-faint' }}">{{ $mdDone ? $a->md_on?->format('d M Y') : '—' }}</td>
                         <td class="small {{ $mdDone ? '' : 'text-faint' }}">{{ $mdDone ? \Illuminate\Support\Str::limit($a->md_comments, 120) : '—' }}</td>
-                        <td class="small">@if ($a?->hasSignedCopy('md'))<a href="{{ route('gate4.file', [$a, 'md_signed']) }}" class="text-decoration-none"><i class="bi bi-file-earmark-check"></i> Download</a>@else<span class="text-faint">—</span>@endif</td>
+                        <td class="small">
+                            @forelse ($mdDocs as $d)
+                                <a href="{{ route('gate4.document', $d) }}" class="d-block text-decoration-none text-truncate" style="max-width: 220px"><i class="bi bi-paperclip"></i> {{ $d->name }}</a>
+                            @empty
+                                @if ($a?->md_signed_path) <a href="{{ route('gate4.file', [$a, 'md_signed']) }}" class="text-decoration-none"><i class="bi bi-file-earmark-check"></i> Signed copy</a> @else <span class="text-faint">—</span> @endif
+                            @endforelse
+                        </td>
                     </tr>
                     <tr>
-                        <td class="small fw-semibold text-navy">MTIBD Principal Secretary <div class="text-muted fw-normal">{{ $a?->ps_signer_name }}</div></td>
+                        <td class="small fw-semibold text-navy">MTIBD Principal Secretary <div class="text-muted fw-normal">Signature · {{ $a?->ps_signer_name }}</div></td>
                         <td>@if ($psDone)<span class="pill {{ ['authorise' => 'pill-ok', 'clarify' => 'pill-warn', 'decline' => 'pill-danger'][$a->ps_decision] }}">{{ $A::PS_DECISIONS[$a->ps_decision][0] }}</span>@elseif ($stage === 'ps')<span class="pill pill-warn">Pending</span>@else<span class="pill pill-muted">Not started</span>@endif</td>
                         <td class="small {{ $psDone ? '' : 'text-faint' }}">{{ $psDone ? $a->ps_on?->format('d M Y') : '—' }}</td>
                         <td class="small {{ $psDone ? '' : 'text-faint' }}">{{ $psDone ? (\Illuminate\Support\Str::limit($a->ps_comments, 120) ?: '—') : '—' }}</td>
-                        <td class="small">@if ($a?->hasSignedCopy('ps'))<a href="{{ route('gate4.file', [$a, 'ps_signed']) }}" class="text-decoration-none"><i class="bi bi-file-earmark-check"></i> Download</a>@else<span class="text-faint">—</span>@endif</td>
+                        <td class="small">
+                            @forelse ($psDocs as $d)
+                                <a href="{{ route('gate4.document', $d) }}" class="d-block text-decoration-none text-truncate" style="max-width: 220px"><i class="bi bi-file-earmark-check"></i> {{ $d->name }}</a>
+                            @empty
+                                <span class="text-faint">—</span>
+                            @endforelse
+                        </td>
                     </tr>
                 </tbody>
             </table>
@@ -1202,17 +1387,17 @@ new class extends Component
 
         @if ($outcome === 'authorised')
             <div class="callout callout-success small mb-0">
-                <i class="bi bi-box-arrow-in-right me-1"></i> Fully executed Grant Agreement — handed over to <strong>Gate 6</strong> for conditions precedent and onboarding
+                <i class="bi bi-box-arrow-in-right me-1"></i> Grant Agreement signed by the Principal Secretary — handed over to <strong>Gate 6</strong> for conditions precedent and onboarding
                 @if ($openConds) — {{ $openConds }} {{ \Illuminate\Support\Str::plural('condition', $openConds) }} to be met. @else. @endif
                 Disbursement remains subject to the conditions precedent and financial controls.
             </div>
         @elseif ($outcome === 'not_authorised')
-            <div class="callout callout-warning small mb-0"><i class="bi bi-x-octagon me-1"></i> The grant did not receive the required signatures and cannot proceed. The applicant has been notified by e-mail.</div>
+            <div class="callout callout-warning small mb-0"><i class="bi bi-x-octagon me-1"></i> The grant was not approved and cannot proceed. The applicant has been notified by e-mail.</div>
         @elseif ($outcome === 'clarification')
             <div class="callout callout-warning small mb-3">
                 <i class="bi bi-arrow-return-left me-1"></i>
                 Returned by the {{ $a->heldBy() === 'ps' ? 'Principal Secretary' : 'Managing Director' }}.
-                Resolve the matters raised and resubmit — it goes back to the {{ $a->heldBy() === 'ps' ? 'Principal Secretary (the Managing Director\'s approval stands)' : 'Managing Director' }}.
+                Resolve the matters raised and resubmit — it goes back to the {{ $a->heldBy() === 'ps' ? 'Principal Secretary (the Managing Director\'s review stands)' : 'Managing Director, starting from the documents sent last time' }}.
             </div>
             @if ($this->canResubmit)
                 <label class="form-label small fw-semibold">How the clarification was addressed <span class="req">*</span></label>
@@ -1224,10 +1409,10 @@ new class extends Component
                     </button>
                 </div>
             @endif
-        @else
+        @elseif ($stage !== 'ps')
             <div class="empty-state py-4">
                 <div class="empty-icon"><i class="bi bi-box-arrow-in-right"></i></div>
-                <p class="small text-muted mb-0">Once both signatures are recorded, the transaction is handed over to <strong>Gate 6</strong> for conditions precedent and onboarding.</p>
+                <p class="small text-muted mb-0">Once the Principal Secretary's signed documents are uploaded, the transaction is handed over to <strong>Gate 6</strong> for conditions precedent and onboarding.</p>
             </div>
         @endif
     </section>

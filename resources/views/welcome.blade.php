@@ -173,12 +173,12 @@
 @php
     // Facility rules — read from config/cif.php so the page always matches what the system applies
     $P          = \App\Models\EnterpriseProfile::class;
-    $ratioLabel = $P::grantRatioLabel();                                       // e.g. "50%"
-    $ratio      = $P::grantRatio();
+    $ratioLabel = $P::grantRatioLabel();                                       // "50% of the first US$ 300,000 + 33% above, up to US$ 350,000"
+    $firstPct   = rtrim(rtrim(number_format($P::grantRatio() * 100, 1), '0'), '.').'%';   // "50%" 
     $minInvUsd  = $P::minInvestorUsd();
     $minLesotho = (int) config('cif.co_investment.min_lesotho_pct', 70);
-    $exInvest   = 1000000;                                                     // worked example, in Maloti
-    $exGrant    = $exInvest * $ratio;
+    $exInvestUsd = 400000;                                                    // worked example, in US$
+    $exGrantUsd  = $P::matchingGrantUsd($exInvestUsd);
 
     $gates = [
         ['no' => 1, 'phase' => 'Apply & assess', 'title' => 'Eligibility Screening',
@@ -243,12 +243,12 @@
 
                 <p class="fs-5 text-white-75 mb-0" style="max-width: 580px;">
                     When a private investor puts money into a growing Basotho enterprise, the LEHSFF Co-Investment Facility
-                    adds a <strong class="text-white">non-repayable CAFI grant</strong> of {{ $ratioLabel }} of that investment.
+                    adds a <strong class="text-white">non-repayable CAFI grant</strong>: {{ $ratioLabel }}.
                     Apply with your investor, or let us match you with one.
                 </p>
 
                 <dl class="hero-stats row mt-5 pt-4 mb-0" style="max-width: 580px;">
-                    <div class="col-4"><dt>Matching grant</dt><dd class="text-cif-accent">{{ $ratioLabel }}</dd></div>
+                    <div class="col-4"><dt>Matching grant</dt><dd class="text-cif-accent">Up to {{ $firstPct }}</dd></div>
                     <div class="col-4"><dt>Review gates</dt><dd>{{ count($gates) }}</dd></div>
                     <div class="col-4"><dt>Pathways</dt><dd>2</dd></div>
                 </dl>
@@ -306,21 +306,21 @@
                     <div class="money-box">
                         <div class="icon-box primary sm mb-2"><i class="bi bi-briefcase"></i></div>
                         <div class="small text-muted mb-1">Investor puts in</div>
-                        <div class="big">M {{ number_format($exInvest) }}</div>
+                        <div class="big">US$ {{ number_format($exInvestUsd) }}</div>
                         <div class="small text-muted mt-1">equity, loan or other</div>
                     </div>
                     <div class="arrow"><i class="bi bi-plus-lg"></i></div>
                     <div class="money-box">
                         <div class="icon-box accent sm mb-2"><i class="bi bi-gift"></i></div>
                         <div class="small text-muted mb-1">CAFI matching grant</div>
-                        <div class="big text-cif-accent">M {{ number_format($exGrant) }}</div>
-                        <div class="small text-muted mt-1">{{ $ratioLabel }} · non-repayable</div>
+                        <div class="big text-cif-accent">US$ {{ number_format($exGrantUsd) }}</div>
+                        <div class="small text-muted mt-1">{{ round($exGrantUsd / $exInvestUsd * 100) }}% of the investment · non-repayable</div>
                     </div>
                     <div class="arrow"><i class="bi bi-arrow-right"></i></div>
                     <div class="money-box" style="border-color: var(--cif-accent);">
                         <div class="icon-box accent sm mb-2"><i class="bi bi-graph-up-arrow"></i></div>
                         <div class="small text-muted mb-1">Total for growth</div>
-                        <div class="big">M {{ number_format($exInvest + $exGrant) }}</div>
+                        <div class="big">US$ {{ number_format($exInvestUsd + $exGrantUsd) }}</div>
                         <div class="small text-muted mt-1">for the approved budget</div>
                     </div>
                 </div>
@@ -409,7 +409,7 @@
                     </div>
                     <div class="fw-semibold small text-cif-navy mt-3 mb-1">What you get</div>
                     <ul class="tick-list">
-                        <li><i class="bi bi-check-circle-fill"></i> A non-repayable grant of {{ $ratioLabel }} of what your investor puts in</li>
+                        <li><i class="bi bi-check-circle-fill"></i> A non-repayable grant: {{ $ratioLabel }}</li>
                         <li><i class="bi bi-check-circle-fill"></i> Help finding an investor if you do not have one yet</li>
                         <li><i class="bi bi-check-circle-fill"></i> A structured review that strengthens your business case and governance</li>
                         <li><i class="bi bi-check-circle-fill"></i> Follow-up support and monitoring once you are in the portfolio</li>
@@ -510,7 +510,7 @@
             <div class="col-lg-8">
                 <div class="row g-4">
                     @foreach ([
-                        ['The grant follows the investor', 'CAFI matches '.$ratioLabel.' of the private investment. A grant tranche is only paid once the matching investor money has actually arrived and been verified.'],
+                        ['The grant follows the investor', 'The CAFI grant is '.$ratioLabel.' of the private investment. A grant tranche is only paid once the matching investor money has actually arrived and been verified.'],
                         ['Approved budget only', 'The grant may only be spent on the categories in the approved grant utilisation budget. Changes need approval first.'],
                         ['Spend it in Lesotho', 'At least '.$minLesotho.'% of the grant must be spent in Lesotho. Any spending outside Lesotho must be justified.'],
                         ['Paid to the verified account', 'Payments go only to a bank account in the enterprise’s name, verified against bank documents.'],
@@ -579,7 +579,7 @@
         <div class="accordion faq" id="faqList">
             @foreach ([
                 ['Do we have to pay the grant back?', 'No. The CAFI matching grant is non-repayable and does not give CAFI shares in your company. It must, however, be used for the approved budget and reported on — misuse can lead to the grant being recovered.'],
-                ['How much grant can we get?', 'The grant is '.$ratioLabel.' of the money your private investor(s) put into the transaction, subject to the Facility’s limits. The final amount is confirmed by the Investment Committee and written into the Grant Agreement.'],
+                ['How much grant can we get?', 'The grant is worked out on the money your private investor puts into the transaction: '.$ratioLabel.'. For example, US$ 400,000 from the investor gives a grant of US$ '.number_format($P::matchingGrantUsd(400000)).'. Your total CAFI grants over all transactions are also limited to US$ '.number_format((float) config('cif.co_investment.cumulative_cap_usd', 350000)).'. The final amount is confirmed by the Investment Committee and written into the Grant Agreement.'],
                 ['We do not have an investor yet. Can we still apply?', 'Yes. Register and complete your enterprise profile, and choose matchmaking. LEHSFF matches you with suitable investors and facilitates the introduction. Once an investor commits, you submit a Transaction EOI.'],
                 ['What kind of investment counts?', 'Equity, convertible notes / SAFEs, loans or revenue-based financing from a private investor can all qualify. The investor must commit at least US$ '.number_format($minInvUsd).' and provide proof of the money when it is paid in.'],
                 ['How long does the process take?', 'It depends mainly on how complete your application is and how quickly requested documents come in. You can follow each gate online, and you are e-mailed whenever something is needed from you.'],
@@ -617,6 +617,12 @@
         <div class="d-flex align-items-center gap-2">
             <span class="brand-mark" style="width:32px;height:32px;border-radius:8px;font-size:.75rem;">CI</span>
             <span>&copy; {{ date('Y') }} LEHSFF Co-Investment Facility · CAFI. All rights reserved.</span>
+            @php $fx = \App\Support\ExchangeRates::info(); @endphp
+            <span title="{{ $fx['live'] ? 'Live rate from '.$fx['source'] : 'No live rate fetched yet — using the configured rate' }}">
+                <i class="bi bi-currency-exchange me-1"></i>1 US$ = M {{ number_format($fx['rate'], 4) }}
+                @if ($fx['rate_date']) · {{ \Illuminate\Support\Carbon::parse($fx['rate_date'])->format('d M Y') }} @endif
+                @unless ($fx['live']) · <span class="text-warning">configured rate</span> @endunless
+            </span>
         </div>
         <div class="d-flex gap-4">
             <a href="#" class="text-white-60 text-decoration-none">Privacy</a>

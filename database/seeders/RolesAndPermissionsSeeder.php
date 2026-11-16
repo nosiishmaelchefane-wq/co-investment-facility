@@ -48,8 +48,8 @@ class RolesAndPermissionsSeeder extends Seeder
         ],
         // Gate 5 · Final authorisation (§3.6) — names keep the old "gate4." prefix so existing assignments keep working
         'gate4' => [
-            'gate4.md' => 'Record the Managing Director’s signature on the Grant Agreement',
-            'gate4.ps' => 'Record the Principal Secretary’s signature on the Grant Agreement',
+            'gate4.md' => 'Send documents to the Managing Director & record the review',
+            'gate4.ps' => 'Upload the Principal Secretary’s signed documents & record the signature',
         ],
         // Gate 6 · Conditions precedent & onboarding — names keep the old "gate5." prefix
         'gate5' => [
@@ -109,8 +109,8 @@ class RolesAndPermissionsSeeder extends Seeder
         ],
         'pmu_director' => [
             'PMU Director of Implementation', 'internal', 'bi-person-check',
-            'Gate 4: approves the transaction to proceed to final authorisation (Gate 5). Gate 7: approves each grant payment.',
-            ['eoi.view-all', 'readiness.director', 'disburse.approve', 'portfolio.monitor', 'reports.view', 'reports.export'],
+            'Gate 4: approves the transaction to proceed to final authorisation. Gate 5: sends the documents to the Managing Director, records the review and uploads the Principal Secretary’s signed documents. Gate 7: approves each grant payment.',
+            ['eoi.view-all', 'readiness.director', 'gate4.md', 'gate4.ps', 'disburse.approve', 'portfolio.monitor', 'reports.view', 'reports.export'],
         ],
         'managing_director' => [
             'CAFI Managing Director', 'internal', 'bi-person-badge',

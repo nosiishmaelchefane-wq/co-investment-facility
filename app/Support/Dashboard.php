@@ -321,21 +321,22 @@ class Dashboard
             }
         }
 
-        /* ---------- Gate 5 · MD / PS signatures (recorded by the PMU) ---------- */
+        /* ---------- Gate 5 · MD review / PS signature (recorded by the PMU) ---------- */
         if ($u->canAny(['gate4.md', 'gate4.ps', 'gate5.verify'])) {
             $rounds = Authorisation::whereNull('decided_at')
                 ->whereHas('expressionOfInterest', fn ($q) => $q->where('status', EOI::STATUS_AUTHORISATION))
                 ->with('expressionOfInterest.user:id,name')->get();
 
-            $meta = fn ($a, $role) => $a->hasSignedCopy($role) ? 'Signed copy uploaded — record the decision'
-                : ($a->sentForSigning($role) ? 'Sent for signing '.$a->{"{$role}_sent_at"}->diffForHumans() : 'Not yet sent for signing');
+            $meta = fn ($a, $role) => $role === 'ps'
+                ? ($a->hasSignedCopy('ps') ? 'Signed documents uploaded — record the signature' : 'Forward to the PS by e-mail and upload the signed documents')
+                : ($a->sentForSigning('md') ? 'Sent for review '.$a->md_sent_at->diffForHumans().' — record the outcome' : 'Not yet sent for review');
 
             if ($u->canAny(['gate4.md', 'gate5.verify'])) {
-                $add('Managing Director signature', 'Gate 5 — the MD signs the Grant Agreement first.', 'bi-person-badge', 'primary', 'MD · PMU',
+                $add('Managing Director review', 'Gate 5 — the MD reviews the documents first.', 'bi-person-badge', 'primary', 'MD · PMU',
                     $rounds->filter(fn ($a) => $a->stage() === 'md')->map(fn ($a) => $this->row($a->expressionOfInterest, 'g4', $meta($a, 'md'))));
             }
             if ($u->canAny(['gate4.ps', 'gate5.verify'])) {
-                $add('Principal Secretary signature', 'Gate 5 — the PS signs after the MD (formal approval).', 'bi-bank', 'primary', 'PS · PMU',
+                $add('Principal Secretary signature', 'Gate 5 — signed by the PS outside the system (formal approval).', 'bi-bank', 'primary', 'PS · PMU',
                     $rounds->filter(fn ($a) => $a->stage() === 'ps')->map(fn ($a) => $this->row($a->expressionOfInterest, 'g4', $meta($a, 'ps'))));
             }
             if ($u->can('gate5.verify')) {

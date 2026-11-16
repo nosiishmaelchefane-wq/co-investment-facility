@@ -29,7 +29,7 @@ class EnterpriseDocument extends Model
     public const TYPES = [
         // 1 · Company profile
         'logo'                     => ['Company logo',                                  'Optional — JPG or PNG',                                                                 'company',     false],
-        'shareholders_list'        => ['List of shareholders',                          'Only if you did not fill in the shareholders table above',                              'company',     'shareholders'],
+        'shareholders_list'        => ['List of shareholders',                          'Only if you did not fill in the shareholders table above',                              'legal',       'shareholders'],
         // 2 · Legal status
         'registration_cert'        => ['Company registration (OBFC)',                   'Issued by the Government of Lesotho, showing the shareholders and their shareholding', 'legal',       'registered'],
         'registration_undertaking' => ['Signed undertaking to register',                'A signed statement that you are willing and able to complete your registration',       'legal',       'not_registered'],
@@ -44,11 +44,16 @@ class EnterpriseDocument extends Model
         'pitch_deck'               => ['Pitch deck',                                    'Upload a pitch deck or a business plan — one of the two is required',                   'attachments', 'plan_or_deck'],
         'financials'               => ['Financial statements',                          'Up to two years for established firms; at least three months for early-stage firms',   'attachments', true],
         'projections'              => ['Two-year financial projections',                'Spreadsheet or PDF',                                                                    'attachments', true],
-        'commitment'               => ['Term sheet from your investor(s)',              'Signed term sheet (or LOI / investment agreement)',                                     'attachments', true],
+        // 4 · Business & financials (form v2 8.2.10, 8.3.11, 8.4 C5) — only when there is an investor
+        'investor_evidence'        => ['Evidence of investor engagement or commitment', 'Optional — e.g. an investment memorandum, or a letter or e-mail from the investor (8.2.10)', 'business',    false],
+        'commitment'               => ['Letter of Intent, Term Sheet or transaction document', 'LOI, term sheet or investment agreement, where available (8.3.11)',                     'business',    'investor'],
+        'quotation'                => ['Supporting quotation or cost estimate',         'Optional — quotations or cost estimates for the grant budget (8.4 C5)',                 'business',    false],
         'team_resumes'             => ['Management team CVs & organisation chart',      'All files compressed in one archive',                                                   'attachments', true],
         'cap_table'                => ['Cap table',                                     "The company's capitalisation table",                                                    'attachments', true],
         'budget'                   => ['Operational budget incl. use of the grant',     'Use the budget template — full operational budget in LSL, including the grant',        'attachments', true],
-        'bank_confirmation'        => ['Bank confirmation letter',                      'A letter or stamped statement from your bank showing the account name and number',     'business',    'investor'],
+        // Uploaded by the applicant at Gate 4 (Grant readiness) — not part of the profile, never required there
+        'bank_confirmation'        => ['Bank confirmation letter',                      'A letter or stamped statement from your bank showing the account name and number',     'readiness',   'readiness'],
+        'traders_licence'          => ['Trader\'s licence',                             'Current trader\'s licence for the business, if you have one',                         'legal',       false],
         'tax_clearance'            => ['Tax clearance certificate',                     'Optional — from Revenue Services Lesotho',                                              'attachments', false],
         'other'                    => ['Other supporting document',                     'Optional — anything else that helps',                                                   'attachments', false],
     ];
@@ -71,6 +76,9 @@ class EnterpriseDocument extends Model
         'pitch_deck'               => 'A short presentation (usually 10–20 slides) of the kind you show investors: the problem, your solution, market, business model, traction, team, financials and what the investment is for. Upload this OR a business plan.',
         'financials'               => 'Your income statement (profit & loss), balance sheet and, if available, cash-flow statement. Established firms: the last two years. Early-stage firms: at least the last three months (management accounts are fine).',
         'projections'              => 'Your expected income, costs and cash flow for the next two years, showing the effect of the investment and the CAFI grant.',
+        'investor_evidence'        => 'Anything that shows the investor is engaged or committed: an investment memorandum, a letter or e-mail from the investor, minutes of an investment committee.',
+        'quotation'                => 'Quotations or cost estimates from suppliers for the items in your grant budget. Optional when you apply — more evidence may be requested during due diligence.',
+        'traders_licence'          => 'The trader\'s licence issued for the business (Ministry of Trade / local council). Upload the current one.',
         'commitment'               => 'A document from your investor showing they are committed: a signed term sheet, a letter of intent (LOI) or the investment agreement. It should state the amount and the terms.',
         'team_resumes'             => 'CVs of the people running the company and a simple organisation chart showing who reports to whom, compressed into one archive (.zip).',
         'cap_table'                => 'A capitalisation ("cap") table is a simple table showing who owns the company: each shareholder, how many shares they hold and their % ownership — before and after the new investment. A spreadsheet is fine.',
@@ -93,6 +101,9 @@ class EnterpriseDocument extends Model
         'pitch_deck'        => 'pdf,pptx,ppt',
         'cap_table'         => 'pdf,xlsx,xls,csv',
         'budget'            => 'pdf,xlsx,xls,csv',
+        'quotation'         => 'pdf,jpg,jpeg,png,xlsx,xls,docx,doc',
+        'investor_evidence' => 'pdf,jpg,jpeg,png,docx,doc',
+        'commitment'        => 'pdf,jpg,jpeg,png,docx,doc',
     ];
 
     public const LANGUAGE_NOTE = 'All attachments should be in English; other languages will not be accepted.';

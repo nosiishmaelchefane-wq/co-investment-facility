@@ -78,6 +78,29 @@ class GrantReadiness extends Model
         'returned' => ['Returned for clarification or corrective action', 'Back to the responsible party before resubmission.', 'bi-arrow-return-left', 'pill-warn'],
     ];
 
+    /**
+     * Review checklists (§3.5.2 Hub Manager · §3.5.3 PMU Director of Implementation).
+     * key => [label, hint, document] — document: iam | memo | agreement | null (opens from the checklist)
+     * Every item must be ticked before the reviewer can approve; a return only needs the comments.
+     */
+    public const HUB_CHECKS = [
+        'iam'        => ['Investment Appraisal Memorandum reviewed',  'Gate 2 appraisal of the transaction, as considered by the Investment Committee', 'iam'],
+        'memo'       => ['Grant Readiness Memo reviewed',             'Grants Management’s checks, bank verification, outstanding issues and recommendation', 'memo'],
+        'agreement'  => ['Draft Grant Agreement reviewed',            'Parties, grant amount, conditions and reporting obligations', 'agreement'],
+        'objectives' => ['Consistent with growth objectives and Facility requirements', 'The grant supports the enterprise’s growth plan and the CI Facility’s objectives', null],
+        'budget'     => ['Budget and documents satisfactory',         'Grant budget, eligible expenditure and supporting documents are in order', null],
+        'issues'     => ['Earlier issues addressed',                  'Committee conditions and earlier readiness issues are resolved or have an agreed plan', null],
+    ];
+
+    public const DIRECTOR_CHECKS = [
+        'iam'        => ['Investment Appraisal Memorandum reviewed',  'Gate 2 appraisal of the transaction, as considered by the Investment Committee', 'iam'],
+        'memo'       => ['Grant Readiness Memo reviewed',             'Including the Hub Manager’s approval for submission', 'memo'],
+        'agreement'  => ['Draft Grant Agreement reviewed',            'Ready to go to the CAFI Managing Director at Gate 5', 'agreement'],
+        'internal'   => ['Internal review steps complete',            'Grants Management review and Hub Manager approval are recorded', null],
+        'amount'     => ['Grant amount and key conditions documented', 'The grant amount, tranches and conditions match the Committee decision', null],
+        'material'   => ['Material issues resolved',                  'No open issue would stop the grant from being authorised', null],
+    ];
+
     public const OUTCOME_APPROVED = 'approved';
     public const OUTCOME_RETURNED = 'returned';
 
@@ -95,15 +118,18 @@ class GrantReadiness extends Model
     protected $fillable = [
         'expression_of_interest_id', 'committee_review_id', 'round', 'resubmission_note', 'private_amount', 'grant_amount',
         'checks', 'lesotho_pct', 'bank', 'bank_evidence_path', 'bank_evidence_name',
+        'bank_requested_at', 'bank_requested_by', 'bank_submitted_at',
         'agreement_path', 'agreement_name', 'agreement_size', 'agreement_uploaded_at',
         'issues', 'recommendation', 'justification', 'gm_by', 'gm_on', 'gm_submitted_at',
-        'hub_decision', 'hub_comments', 'hub_on', 'hub_by', 'hub_decided_at',
-        'director_decision', 'director_comments', 'director_on', 'director_by', 'director_decided_at',
+        'hub_decision', 'hub_comments', 'hub_checks', 'hub_on', 'hub_by', 'hub_decided_at',
+        'director_decision', 'director_comments', 'director_checks', 'director_on', 'director_by', 'director_decided_at',
         'outcome', 'decided_at',
     ];
 
     protected $casts = [
         'checks'                => 'array',
+        'hub_checks'            => 'array',
+        'director_checks'       => 'array',
         'bank'                  => 'array',
         'issues'                => 'array',
         'lesotho_pct'           => 'decimal:2',
@@ -113,6 +139,8 @@ class GrantReadiness extends Model
         'hub_on'                => 'date',
         'director_on'           => 'date',
         'gm_submitted_at'       => 'datetime',
+        'bank_requested_at'     => 'datetime',
+        'bank_submitted_at'     => 'datetime',
         'hub_decided_at'        => 'datetime',
         'director_decided_at'   => 'datetime',
         'agreement_uploaded_at' => 'datetime',
@@ -227,8 +255,8 @@ class GrantReadiness extends Model
             $action->isNotEmpty() ? 'Resolve the checks marked "Action required": '.$action->implode(', ').'.' : null,
             $noNote ? 'Explain each exception in a short note.' : null,
             ($checks['bank']['status'] ?? null) !== 'confirmed' ? 'The bank account must be verified (Confirmed) before the file proceeds.' : null,
-            collect(['bank', 'account_name', 'account_number'])->contains(fn ($k) => blank($bank[$k] ?? null)) ? 'The enterprise has not entered its bank, account name and account number in its profile (Business → Bank account for the grant).' : null,
-            empty($form['has_bank_evidence']) ? 'No bank evidence: the enterprise has not uploaded a bank confirmation letter — ask for it, or upload the document you verified against.' : null,
+            collect(['bank', 'account_name', 'account_number'])->contains(fn ($k) => blank($bank[$k] ?? null)) ? 'The applicant has not entered the bank, account name and account number yet — use "Request bank details" to e-mail them the link.' : null,
+            empty($form['has_bank_evidence']) ? 'No bank evidence: the applicant has not uploaded a bank confirmation letter — request it, or upload the document you verified against.' : null,
             ! is_numeric($form['lesotho_pct'] ?? null)
                 ? 'The enterprise has not yet said how much of the grant is spent outside Lesotho (enterprise profile → Business, after the budget). Ask them to complete it.' : null,
             is_numeric($form['lesotho_pct'] ?? null) && (float) $form['lesotho_pct'] < self::minLesothoPct()

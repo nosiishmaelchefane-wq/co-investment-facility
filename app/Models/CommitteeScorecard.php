@@ -124,6 +124,7 @@ class CommitteeScorecard extends Model
     protected $fillable = [
         'committee_review_id', 'user_id', 'coi', 'coi_details', 'answers', 'scores', 'innovation', 'comments', 'pack_comments',
         'use_of_funds_notes', 'issues', 'recommendation', 'takeaways', 'submitted_at',
+        'edited_by', 'edited_at', 'reopened_by', 'reopened_at',
     ];
 
     protected $casts = [
@@ -133,6 +134,8 @@ class CommitteeScorecard extends Model
         'innovation'   => 'array',
         'comments'     => 'array',
         'submitted_at' => 'datetime',
+        'edited_at'    => 'datetime',
+        'reopened_at'  => 'datetime',
     ];
 
     public function review(): BelongsTo
@@ -143,6 +146,18 @@ class CommitteeScorecard extends Model
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
+    }
+
+    /** The secretary who last changed this scorecard on the member's behalf */
+    public function editor(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'edited_by');
+    }
+
+    /** The secretary who last reopened this scorecard for the member */
+    public function reopener(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'reopened_by');
     }
 
     public function isSubmitted(): bool

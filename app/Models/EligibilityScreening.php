@@ -38,9 +38,9 @@ class EligibilityScreening extends Model
     public const COMPLETENESS = [
         'application'  => ['Application information',  'Mandatory enterprise and transaction fields completed'],
         'documents'    => ['Supporting documentation', 'Required enterprise, investor and transaction documents uploaded'],
-        'investor'     => ['Investor information',     'Investor identity and participation information provided'],
-        'transaction'  => ['Transaction information',  'Proposed investment and transaction details provided'],
-        'use_of_funds' => ['Use of funds',             'Intended use of private investment and CI grant defined'],
+        'investor'     => ['Investor information',     'Lead investor, investment amount and engagement status provided (profile 8.2)'],
+        'transaction'  => ['Transaction information',  'Instrument, terms, expected close and transaction description provided (profile 8.3)'],
+        'use_of_funds' => ['Use of funds',             'Grant-only budget and use-of-grant declarations completed (profile 8.4)'],
         'declarations' => ['Declarations',             'Required applicant declarations completed'],
         'submission'   => ['Submission',               'Application formally submitted by an authorised enterprise representative'],
     ];
@@ -179,29 +179,57 @@ class EligibilityScreening extends Model
     /**
      * What the platform can check automatically.
      * check => ['met' => bool, 'missing' => [string, ...]]
+     *
+     * Profile answers are checked with the profile's own rules (EnterpriseProfile::requiredFields / isAnswered /
+     * missingDocuments), so Gate 1 asks for exactly what the profile form v2 asks for — including questions that
+     * only apply in some cases (e.g. the investor and grant questions when the enterprise has an investor).
+     * Each missing profile answer is grouped under the completeness check it belongs to:
+     *   application  §1 Company & contact · §2 Legal status & markets · employees & key people · customers, revenue
+     *   investor     8.2 Investor information        transaction  8.3 Transaction information + total project cost
+     *   use_of_funds 8.4 Proposed use of the grant   declarations E&S confirmation + profile declaration
+     *   documents    required uploads (Attachments and the uploads in each section)
+     * Completeness is about missing information only. Answers that need judgement (e.g. a declared double financing)
+     * are shown to the officer in the eligibility screening, not listed here as missing.
      */
+    public const PROFILE_GROUPS = [
+        'investor' => [
+            'has_investor', 'lead_investor_name', 'lead_investor_contact_name', 'lead_investor_email', 'lead_investor_phone',
+            'lead_investor_website', 'investor_type', 'lead_investor_country', 'investment_currency', 'lead_investor_amount',
+            'transaction_status', 'investor_commitment',
+        ],
+        'transaction' => [
+            'participation', 'tx_amount_agreed', 'tx_amount', 'tx_terms_agreed', 'valuation', 'valuation_by', 'valuation_method',
+            'expected_close', 'tx_conditions_outstanding', 'tx_description', 'project_cost',
+        ],
+        'use_of_funds' => [
+            'grant_plan', 'grant_outside_justification', 'grant_lesotho_70', 'double_financing', 'double_financing_details', 'grant_growth_support',
+        ],
+        'declarations' => ['es_confirmed', 'declaration_agreed', 'declared_name', 'declared_on'],
+    ];
+
     public static function autoCompleteness(ExpressionOfInterest $eoi, ?EnterpriseProfile $p): array
     {
-        $sections  = $p?->sectionStatus() ?? [];
         $noProfile = $p ? [] : ['Enterprise profile has not been started'];
 
         $eoiMissing = fn (array $fields) => collect($fields)
-            ->filter(fn ($label, $field) => blank($eoi->{$field}))
+            ->filter(fn ($label, $field) => is_array($eoi->{$field}) ? $eoi->{$field} === [] : blank($eoi->{$field}))
             ->map(fn ($label) => "EOI: {$label} not provided")
             ->values()->all();
 
-        $sectionMissing = fn (array $keys) => $p
-            ? collect($keys)->reject(fn ($k) => $sections[$k] ?? false)
-                ->map(fn ($k) => 'Enterprise profile: '.EnterpriseProfile::SECTIONS[$k][0].' incomplete')
-                ->values()->all()
+        // Every required profile answer that is still empty: field => section
+        $unanswered = $p
+            ? collect(array_keys(EnterpriseProfile::SECTIONS))
+                ->flatMap(fn ($section) => collect($p->missingFields($section))->mapWithKeys(fn ($f) => [$f => $section]))
+                ->all()
             : [];
+        $grouped  = collect(self::PROFILE_GROUPS)->flatten()->all();
+        $label    = fn (string $f) => EnterpriseProfile::LABELS[$f] ?? ucfirst(str_replace('_', ' ', $f));
+        $notAnswered = fn (array $fields) => collect($fields)->map(fn ($f) => 'Enterprise profile: '.$label($f).' not answered')->values()->all();
+        $profileGroup = fn (string $group) => $notAnswered(array_values(array_intersect(array_keys($unanswered), self::PROFILE_GROUPS[$group])));
+        $profileOther = $notAnswered(array_values(array_diff(array_keys($unanswered), $grouped)));
 
-        $docMissing = fn () => $p
-            ? collect($p->missingDocuments())->map(fn ($t) => EnterpriseDocument::missingLabel($t).' not uploaded')->unique()->values()->all()
-            : [];
-        $profileBlank = fn (array $fields) => $p
-            ? collect($fields)->filter(fn ($label, $f) => blank($p->{$f}))->map(fn ($label) => "Enterprise profile: {$label} not provided")->values()->all()
-            : [];
+        $rate     = EnterpriseProfile::usdRate();
+        $grantUsd = $p && $p->grant_requested !== null ? (float) $p->grant_requested / $rate : null;
 
         $checks = [
             'application' => [
@@ -212,11 +240,11 @@ class EligibilityScreening extends Model
                     'full_time_employees' => 'number of employees',
                 ]),
                 ...$noProfile,
-                ...$sectionMissing(['company', 'legal', 'people', 'business']),
+                ...$profileOther,      // §1 company & contact, §2 legal, employees & key people, customers, revenue
             ],
             'documents' => [
                 ...$noProfile,
-                ...$docMissing(),
+                ...($p ? collect($p->missingDocuments())->map(fn ($t) => 'Enterprise profile: '.EnterpriseDocument::missingLabel($t).' not uploaded')->unique()->values()->all() : []),
             ],
             'investor' => [
                 ...$eoiMissing(['investor_name' => 'investor name', 'investor_status' => 'investor engagement status']),
@@ -225,38 +253,44 @@ class EligibilityScreening extends Model
                     ? ['EOI: investor amount (US$ '.number_format((float) $eoi->investor_amount_usd).') is below the US$ '.number_format(EnterpriseProfile::minInvestorUsd()).' minimum']
                     : []),
                 ...$noProfile,
-                ...$profileBlank(['participation' => 'financing type']),
-                ...($p && $p->has_investor === false ? ['Enterprise profile: the enterprise says it has no participating investor'] : []),
-                ...($p && $p->has_investor !== false && $p->investorRows() === [] ? ['Enterprise profile: participating investors not provided'] : []),
-                ...($p && collect($p->investorRows())->contains(fn ($r) => ! is_numeric($r['ticket'] ?? null) || (float) $r['ticket'] <= 0)
-                    ? ['Enterprise profile: an investor has no investment amount'] : []),
-                ...($p && collect($p->investorRows())->contains(fn ($r) => blank($r['id_number'] ?? null))
-                    ? ['Enterprise profile: an investor has no ID / passport / registration number'] : []),
+                ...($p && $p->has_investor === false ? ['Enterprise profile: the enterprise says it has no participating investor (8.2)'] : []),
+                ...$profileGroup('investor'),
                 ...($p && $p->investorAmount() !== null && ! EnterpriseProfile::meetsInvestorMinimum($p->investorAmount())
-                    ? ['Enterprise profile: investor amount (M '.number_format($p->investorAmount()).') is below the US$ '.number_format(EnterpriseProfile::minInvestorUsd()).' minimum'] : []),
+                    ? ['Enterprise profile: investor amount (US$ '.number_format($p->investorAmount() / $rate).') is below the US$ '.number_format(EnterpriseProfile::minInvestorUsd()).' minimum'] : []),
             ],
             'transaction' => [
                 ...$eoiMissing(['investment_required_usd' => 'total investment required', 'investment_types' => 'type of investment']),
                 ...$noProfile,
-                ...$profileBlank(['round_amount' => 'current investment round', 'participation' => 'financing type', 'project_cost' => 'total project cost']),
+                ...$profileGroup('transaction'),
                 ...(in_array('debt', (array) $eoi->investment_types, true) ? ['EOI: debt is not an eligible instrument for co-investment'] : []),
+                ...($p && $p->participation === 'debt' ? ['Enterprise profile: the investment instrument (8.3.1) is debt, which is not eligible for co-investment'] : []),
                 ...($p && $p->project_cost !== null && $p->grant_requested && (float) $p->project_cost < (float) $p->grant_requested
-                    ? ['Enterprise profile: total project cost is less than the CAFI grant'] : []),
+                    ? ['Enterprise profile: total project cost is less than the CAFI matching grant'] : []),
             ],
             'use_of_funds' => [
                 ...$eoiMissing(['use_of_funds' => 'use of investment', 'use_of_funds_description' => 'planned use of the investment']),
                 ...$noProfile,
-                ...($p && ! $p->document('budget') ? ['Enterprise profile: operational budget (incl. use of the grant) not uploaded'] : []),
-                ...$p ? (function () use ($p) {
-                    $t = $p->budgetTotals();
-                    if ($t['private'] <= 0 && $t['grant'] <= 0) {
-                        return ['Enterprise profile: grant utilisation budget not filled in'];
+                ...$profileGroup('use_of_funds'),
+                ...$p && $p->has_investor !== false ? (function () use ($p, $eoi, $rate, $grantUsd) {
+                    // 8.4 grant-only budget, in US$ (older profiles: the Maloti budget entered before form v2)
+                    $t      = EnterpriseProfile::planTotals((array) ($p->grant_plan ?? []));
+                    $legacy = $p->budgetTotals()['grant'] / $rate;
+                    $total  = $t['total'] > 0 ? $t['total'] : $legacy;
+                    if ($total <= 0) {
+                        return [];   // already listed above as "Proposed grant utilisation budget not answered"
                     }
-                    $inv = $p->investorAmount();
+
+                    $outside = $t['total'] > 0 ? $t['outside'] : (float) $p->grant_outside_lesotho / $rate;
+                    $pct     = round(($total - $outside) / $total * 100, 1);
+                    $min     = EnterpriseProfile::minLesothoPct();
 
                     return array_values(array_filter([
-                        $inv !== null && abs($t['private'] - $inv) >= 1 ? 'Enterprise profile: budget investor column (M '.number_format($t['private']).') does not equal the investor amount (M '.number_format($inv).')' : null,
-                        ! $p->budgetMatchesGrant() ? 'Enterprise profile: budget CAFI grant column (M '.number_format($t['grant']).') does not equal the matching grant (M '.number_format((float) $p->grant_requested).')' : null,
+                        $grantUsd !== null && $total > $grantUsd + 1
+                            ? 'Enterprise profile: grant budget (US$ '.number_format($total).') is more than the CAFI matching grant (US$ '.number_format($grantUsd).')' : null,
+                        $eoi->grant_requested_usd !== null && $grantUsd !== null && (float) $eoi->grant_requested_usd > $grantUsd + 1
+                            ? 'EOI: CAFI grant requested (US$ '.number_format((float) $eoi->grant_requested_usd).') is more than the matching grant (US$ '.number_format($grantUsd).')' : null,
+                        $pct < $min && blank($p->grant_outside_justification)
+                            ? 'Enterprise profile: only '.$pct.'% of the grant is spent in Lesotho (minimum '.$min.'%) and no reason is given' : null,
                     ]));
                 })() : [],
             ],
@@ -264,8 +298,7 @@ class EligibilityScreening extends Model
                 ...(! $eoi->declaration_agree ? ['EOI: declaration not accepted'] : []),
                 ...$eoiMissing(['declaration_name' => 'name of person making the declaration', 'declaration_date' => 'declaration date']),
                 ...$noProfile,
-                ...($p && ! $p->declaration_agreed ? ['Enterprise profile: declaration not signed'] : []),
-                ...($p && ! $p->es_confirmed ? ['Enterprise profile: E&S checklist answers not confirmed'] : []),
+                ...$profileGroup('declarations'),
             ],
             'submission' => [
                 ...($eoi->submitted_at ? [] : ['EOI has not been formally submitted']),

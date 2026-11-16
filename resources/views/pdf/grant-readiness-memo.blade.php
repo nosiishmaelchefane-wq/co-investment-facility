@@ -62,7 +62,7 @@
         <th>2. Grant budget and compliance</th>
         <td>
             <div class="line"><span class="pill {{ $cls('grant_amount') }}">{{ $st('grant_amount') }}</span>
-                Matching: max {{ $P::grantRatioLabel() }} of private investment = {{ $m($facts['matching_max']) }} — {{ $facts['matching_ok'] ? 'complies' : 'does not comply' }}.
+                Matching: max under the grant rule ({{ $P::grantRatioLabel() }}) = {{ $m($facts['matching_max']) }} — {{ $facts['matching_ok'] ? 'complies' : 'does not comply' }}.
                 Cumulative CAFI grants {{ $m($facts['cumulative']) }} of the {{ $m($facts['cap']) }} limit — {{ $facts['cap_ok'] ? 'within the limit' : 'exceeds the limit' }}.
                 @if ($note('grant_amount')) {{ $note('grant_amount') }} @endif</div>
             <div class="line"><span class="pill {{ $cls('eligible') }}">{{ $st('eligible') }}</span> Eligible expenditure aligned with growth objectives. @if ($note('eligible')) {{ $note('eligible') }} @endif</div>

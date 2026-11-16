@@ -9,19 +9,35 @@
 return [
 
     /*
-     | Exchange rate used to show US$ amounts in Maloti (LSL).
-     | 1 USD = X LSL. LSL is pegged 1:1 to the South African rand,
-     | so use the current USD/ZAR rate. Update it in .env:  CIF_USD_TO_LSL=18.00
+     | Exchange rate US$ → Maloti (LSL): 1 USD = X LSL.
+     | The platform fetches the live rate automatically (App\Support\ExchangeRates, scheduled in
+     | routes/console.php) and uses the latest fetched rate everywhere. The value below is only the
+     | FALLBACK used until the first rate is fetched:  .env  CIF_USD_TO_LSL=18.00
+     |   fx.cache_minutes — how long the current rate is cached between database reads
+     |   fx.refresh_cron  — when to fetch a new rate (default 06:15 and 14:15 every day)
      */
     'usd_to_lsl' => (float) env('CIF_USD_TO_LSL', 18.00),
 
+    'fx' => [
+        'cache_minutes' => (int) env('CIF_FX_CACHE_MINUTES', 60),
+        'refresh_cron'  => env('CIF_FX_REFRESH_CRON', '15 6,14 * * *'),
+    ],
+
     /*
-     | Co-investment rules
-     |   grant_ratio       — CAFI matches this share of what the investor puts in (0.5 = 50%)
+     | Co-investment rules (CAFI investment model)
+     |   grant_tiers       — the CAFI grant is worked out on the investor's amount (US$) in tiers:
+     |                         50% of the first US$ 300,000 + 33% of everything above US$ 300,000
+     |                       each tier: up_to_usd (top of the tier; null = no top) => rate
+     |   max_grant_usd     — the grant for one transaction is never more than this (reached at ≈ US$ 906,061)
      |   min_investor_usd  — the investor must be investing at least this much (US$) to apply
+     |   cumulative_cap_usd — total CAFI grants one enterprise may receive over its lifetime (all transactions)
      */
     'co_investment' => [
-        'grant_ratio'      => (float) env('CIF_GRANT_RATIO', 0.5),
+        'grant_tiers'      => [
+            ['up_to_usd' => (float) env('CIF_GRANT_TIER1_TOP_USD', 300000), 'rate' => (float) env('CIF_GRANT_TIER1_RATE', 0.50)],
+            ['up_to_usd' => null,                                          'rate' => (float) env('CIF_GRANT_TIER2_RATE', 0.33)],
+        ],
+        'max_grant_usd'    => (float) env('CIF_MAX_GRANT_USD', 350000),
         'min_investor_usd' => (float) env('CIF_MIN_INVESTOR_USD', 50000),
         // Gate 4 · Grant readiness: total CAFI grants one enterprise may receive, and the share to be spent in Lesotho
         'cumulative_cap_usd' => (float) env('CIF_CUMULATIVE_GRANT_CAP_USD', 350000),

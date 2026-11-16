@@ -3,8 +3,9 @@
     $DD  = \App\Models\DueDiligence::class;
     $DC  = \App\Models\DueDiligenceCondition::class;
     $P   = \App\Models\EnterpriseProfile::class;
-    $m   = fn ($x) => $x === null || $x === '' || (float) $x == 0 ? '—' : 'M '.number_format((float) $x);
-    $u   = fn ($x) => $x === null || $x === '' || (float) $x == 0 ? '' : 'US$ '.number_format((float) $x / $rate);
+    // Amounts are stored in Maloti; shown in US$ first, Maloti underneath
+    $m   = fn ($x) => $x === null || $x === '' || (float) $x == 0 ? '—' : 'US$ '.number_format((float) $x / $rate);
+    $u   = fn ($x) => $x === null || $x === '' || (float) $x == 0 ? '' : 'M '.number_format((float) $x);
     $areas      = $dd->areas ?? [];
     $conditions = $dd->conditions;
     $expected   = $P::matchingGrant($v['private'] ?: null);
@@ -108,7 +109,7 @@
     <tr>
         <td>CAFI grant</td>
         <td class="num">{{ $m($v['grant']) }}<span class="usd">{{ $u($v['grant']) }}</span></td>
-        <td class="small">@if ($expected) Maximum {{ $P::grantRatioLabel() }} of private capital = {{ $m($expected) }} @endif</td>
+        <td class="small">@if ($expected) Maximum under the grant rule ({{ $P::grantRatioLabel() }}) = {{ $m($expected) }} @endif</td>
     </tr>
     <tr>
         <th>Total transaction</th>
@@ -117,13 +118,17 @@
     </tr>
 </table>
 
-{{-- 2 · The five appraisal questions --}}
+{{-- 2 · Appraisal by enterprise profile section (earlier memos: the five appraisal questions) --}}
 <h2>2. Transaction appraisal</h2>
-@foreach ($DD::MEMO_QUESTIONS as $k => [$title, $question])
+@foreach ($DD::memoQuestions($memo) as $k => [$title, $question])
+    @php $mrow = $DD::memoRows($memo)[$k]; @endphp
     <div class="q">
         <h3>{{ $loop->iteration }}. {{ $title }}</h3>
         <div class="question">{{ $question }}</div>
-        <div class="answer">{{ trim($memo[$k]['text'] ?? '') !== '' ? $memo[$k]['text'] : 'Not answered.' }}</div>
+        <div class="answer">{!! nl2br(e(trim($mrow['text']) !== '' ? $mrow['text'] : 'Not answered.')) !!}</div>
+        @if ($mrow['verified'])
+            <div class="question">Verified by {{ $mrow['verified_by'] ?: 'the officer' }}@if ($mrow['verified_at']) on {{ \Illuminate\Support\Carbon::parse($mrow['verified_at'])->format('d M Y') }}@endif</div>
+        @endif
     </div>
 @endforeach
 

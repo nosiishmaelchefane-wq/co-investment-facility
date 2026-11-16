@@ -20,6 +20,8 @@ use Livewire\Component;
 |             → Confirm complete (screening opens)  or  Return for correction (EOI → returned)
 |   Stage 2 · §3.2.2 Eligibility screening — the 8 CAFI checklist criteria, grouped into the 6 screening areas.
 |             Each criterion shows the information the applicant submitted (EOI + enterprise profile + documents).
+|             Profile answers follow application form v2: 8.2 lead investor · 8.3 transaction · 8.4 grant-only budget (US$).
+|             Amounts are shown in US$ first, Maloti underneath.
 |   Stage 3 · §3.2.3 Gate 1 decision — Pass → invited · Clarification required → returned · Not eligible → not_progressed
 |
 |   Screening officer: gate1.decide.  Other staff: read-only.  Applicant: progress, outstanding items and outcome.
@@ -111,8 +113,9 @@ new class extends Component
             'registration_in_progress' => 'Registration in progress', 'not_registered' => 'Not registered',
         ],
         'annual_turnover' => [
-            'below_500k' => 'Below M500,000', '500k_2m' => 'M500,000 – M2 million', '2m_5m' => 'M2 – M5 million',
-            '5m_10m' => 'M5 – M10 million', 'above_10m' => 'Above M10 million',
+            'below_500k' => 'Below M500,000 (≈ US$ 28,000)', '500k_2m' => 'M500,000 – M2 million (≈ US$ 28,000 – 111,000)',
+            '2m_5m' => 'M2 – M5 million (≈ US$ 111,000 – 278,000)', '5m_10m' => 'M5 – M10 million (≈ US$ 278,000 – 556,000)',
+            'above_10m' => 'Above M10 million (≈ US$ 556,000)',
         ],
         'investment_types' => ['equity' => 'Equity', 'quasi_equity' => 'Quasi-equity', 'debt' => 'Debt'],
         'use_of_funds' => [
@@ -141,12 +144,12 @@ new class extends Component
      * Registration documents only appear when they apply to the applicant's answers (OBFC / other country).
      */
     protected const CRITERIA_DOCS = [
-        'enterprise'   => ['registration_cert', 'registration_undertaking', 'foreign_registration', 'business_extract', 'shareholders_list', 'good_standing'],
-        'investor'     => ['cap_table', 'shareholders_list'],
-        'commitment'   => ['commitment'],
+        'enterprise'   => ['registration_cert', 'registration_undertaking', 'foreign_registration', 'business_extract', 'traders_licence', 'shareholders_list', 'good_standing'],
+        'investor'     => ['investor_evidence', 'cap_table', 'shareholders_list'],
+        'commitment'   => ['commitment', 'investor_evidence'],
         'transaction'  => ['commitment', 'cap_table'],
         'funding'      => ['financials', 'projections'],
-        'use_of_funds' => ['budget', 'business_plan', 'pitch_deck'],
+        'use_of_funds' => ['budget', 'quotation', 'business_plan', 'pitch_deck'],
         'alignment'    => ['employee_list', 'business_plan', 'pitch_deck'],
         'exclusions'   => ['ids', 'team_resumes', 'business_extract', 'tax_clearance'],
     ];
@@ -175,9 +178,13 @@ new class extends Component
         $num  = fn ($v, $suffix = '') => $v === null || $v === '' ? null : number_format((float) $v).$suffix;
         $date = fn ($d) => $d?->format('d M Y');
 
-        // Money: EOI amounts are US$, profile amounts are Maloti — always show M first, US$ underneath
-        $fromUsd = fn ($usd) => $usd === null ? [null, null] : ['M '.number_format((float) $usd * $rate), 'US$ '.number_format((float) $usd)];
-        $fromLsl = fn ($lsl) => $lsl === null ? [null, null] : ['M '.number_format((float) $lsl), 'US$ '.number_format((float) $lsl / max($rate, 0.0001))];
+        // Money: EOI amounts and the 8.4 budget are US$, other profile amounts are Maloti — always show US$ first, M underneath
+        $fromUsd = fn ($usd) => $usd === null ? [null, null] : ['US$ '.number_format((float) $usd), '≈ M '.number_format((float) $usd * $rate)];
+        $fromLsl = fn ($lsl) => $lsl === null ? [null, null] : ['US$ '.number_format((float) $lsl / max($rate, 0.0001)), '≈ M '.number_format((float) $lsl)];
+        $usdM    = fn ($usd) => 'US$ '.number_format((float) $usd).' (≈ M '.number_format((float) $usd * $rate).')';
+        $inCur   = fn ($amount, $cur) => $amount === null ? null
+            : (EnterpriseProfile::CURRENCIES[$cur ?: 'LSL'][1] ?? 'M').' '.number_format((float) $amount)
+              .(($cur ?: 'LSL') !== 'USD' ? ' (≈ US$ '.number_format((float) EnterpriseProfile::toLsl((float) $amount, $cur ?: 'LSL') / max($rate, 0.0001)).')' : '');
 
         $eoiRow  = fn ($label, $value, $sub = null, $flag = null) => [$label, $value, 'EOI', $sub, $flag];
         $proRow  = fn ($label, $value, $sub = null, $flag = null) => [$label, $value, 'Profile', $sub, $flag];
@@ -194,8 +201,15 @@ new class extends Component
         // Profile figures used in several criteria (Maloti)
         $investorLsl = $p?->investorAmount();
         $grant       = $p ? (float) $p->grant_requested : null;
-        $budget      = $p?->budgetTotals() ?? ['private' => 0, 'grant' => 0];
-        $budgetSet   = $p && ($budget['private'] > 0 || $budget['grant'] > 0);
+        $grantUsd    = $grant ? $grant / max($rate, 0.0001) : null;
+        $plan        = (array) ($p?->grant_plan ?? []);
+        $planTot     = EnterpriseProfile::planTotals($plan);          // US$
+        $planSet     = $planTot['total'] > 0;
+        $lesothoPct  = $planSet ? round(($planTot['total'] - $planTot['outside']) / $planTot['total'] * 100, 1) : null;
+        $minLesotho  = EnterpriseProfile::minLesothoPct();
+        $engagement  = EnterpriseProfile::TRANSACTION_STATUSES[$p?->transaction_status ?? ''] ?? $p?->transaction_status;
+        $instrument  = EnterpriseProfile::PARTICIPATION[$p?->participation ?? ''] ?? $p?->participation;
+        $cumulative  = $p?->availableCumulativeLsl();
         $breakdown   = $p?->employeeBreakdownTotal();
         $esFlags     = $p && $p->es_checklist ? $p->esScreening() : [];
         $shareTotal  = $p?->shareholderTotal() ?? 0;
@@ -248,16 +262,13 @@ new class extends Component
                     $proRow('Has a participating investor', $yn($p?->has_investor),
                         $p?->has_investor === false ? 'No investor — the matching grant cannot be calculated' : null,
                         $p?->has_investor === false ? 'bad' : ($p?->has_investor ? 'ok' : null)),
-                    $proRow('Investors in the round', collect($p?->investorRows() ?? [])
-                        ->map(fn ($r) => $r['name']
-                            .(filled($r['id_number'] ?? null) ? ' · ID/Reg. '.$r['id_number'] : '')
-                            .(filled($r['country'] ?? null) ? ' ('.$r['country'].')' : '')
-                            .(filled($r['ticket'] ?? null) ? ' — M '.number_format((float) $r['ticket']).' (US$ '.number_format((float) $r['ticket'] / max($rate, 0.0001)).')' : ' — no amount'))
-                        ->all() ?: null,
-                        collect($p?->investorRows() ?? [])->contains(fn ($r) => blank($r['id_number'] ?? null)) ? 'Some investors have no ID / passport / registration number' : null,
-                        collect($p?->investorRows() ?? [])->contains(fn ($r) => blank($r['id_number'] ?? null)) ? 'bad' : null),
-                    $proRow('Lead investor type', $p?->investor_type),
-                    $proRow('Financing type', EnterpriseProfile::PARTICIPATION[$p?->participation ?? ''] ?? $p?->participation),
+                    $proRow('Lead investor (8.2.1)', $p?->lead_investor_name ?: $p?->investor_name,
+                        collect([$p?->investor_type, $p?->lead_investor_country])->filter()->implode(' · ') ?: null),
+                    $proRow('Investor contact (8.2.2 – 8.2.4)', collect([
+                            $p?->lead_investor_contact_name, $p?->lead_investor_email, $p?->lead_investor_phone, $p?->lead_investor_website,
+                        ])->filter()->values()->all() ?: null),
+                    $proRow('Investment amount (8.2.7)', $inCur($p?->lead_investor_amount, $p?->investment_currency)),
+                    $proRow('Investment instrument (8.3.1)', $instrument),
                     $proRow('Investment history', $p ? \App\Models\EnterpriseInvestment::summaryLine($p->investments) : null,
                         'Open the Investments tab to see each investor, how often and how much they have invested'),
                     $proRow('Investor track record (whole facility)', $p ? (\App\Models\EnterpriseInvestment::trackRecordLines($p) ?: null) : null),
@@ -267,8 +278,17 @@ new class extends Component
                 $eoiRow('Investor status', $l('investor_status', $eoi->investor_status)),
                 $eoiRow('Evidence available', $ls('investor_evidence', $eoi->investor_evidence)),
                 ...$profileOnly([
-                    $proRow('Status of the deal', EnterpriseProfile::TRANSACTION_STATUSES[$p?->transaction_status ?? ''] ?? $p?->transaction_status),
-                    $money('Profile', 'Committed by the investor(s)', $fromLsl($investorLsl)),
+                    $proRow('Engagement status (8.2.8)', $engagement),
+                    $proRow('Investor has committed (8.2.9)', EnterpriseProfile::COMMITMENT[$p?->investor_commitment ?? ''] ?? null, null,
+                        match ($p?->investor_commitment) { 'yes' => 'ok', 'no' => 'bad', default => null }),
+                    $proRow('Amount agreed with the investor (8.3.2)', $yn($p?->tx_amount_agreed),
+                        $p?->tx_amount_agreed && $p->tx_amount !== null ? 'Agreed amount: '.$inCur($p->tx_amount, $p->investment_currency) : null,
+                        $p?->tx_amount_agreed === false ? 'bad' : ($p?->tx_amount_agreed ? 'ok' : null)),
+                    $proRow('Terms agreed (8.3.4)', $yn($p?->tx_terms_agreed), null, $p?->tx_terms_agreed === false ? 'bad' : ($p?->tx_terms_agreed ? 'ok' : null)),
+                    $proRow('Material conditions outstanding (8.3.9)', $yn($p?->tx_conditions_outstanding), null,
+                        $p?->tx_conditions_outstanding ? 'bad' : ($p?->tx_conditions_outstanding === false ? 'ok' : null)),
+                    $proRow('Expected close / deployment (8.3.8)', $p?->expected_close),
+                    $money('Profile', 'Committed by the investor', $fromLsl($investorLsl)),
                 ]),
             ],
             'transaction' => [
@@ -276,21 +296,30 @@ new class extends Component
                     in_array('debt', $eoi->investment_types ?? [], true) ? 'Debt is not eligible for co-investment' : null,
                     in_array('debt', $eoi->investment_types ?? [], true) ? 'bad' : null),
                 ...$profileOnly([
-                    $proRow('Financing type', EnterpriseProfile::PARTICIPATION[$p?->participation ?? ''] ?? $p?->participation),
-                    $proRow('Status of the deal', EnterpriseProfile::TRANSACTION_STATUSES[$p?->transaction_status ?? ''] ?? $p?->transaction_status),
+                    $proRow('Investment instrument (8.3.1)', $instrument, $p?->participation === 'debt' ? 'Debt is not eligible for co-investment' : null,
+                        $p?->participation === 'debt' ? 'bad' : null),
+                    $proRow('Engagement status (8.2.8)', $engagement),
+                    $proRow('Valuation (8.3.5)', $inCur($p?->valuation, $p?->investment_currency),
+                        collect([EnterpriseProfile::VALUATION_BY[$p?->valuation_by ?? ''] ?? null, EnterpriseProfile::VALUATION_METHODS[$p?->valuation_method ?? ''] ?? null])->filter()->implode(' · ') ?: null),
+                    $proRow('Transaction description (8.3.10)', $p?->tx_description),
                 ]),
             ],
             'funding' => [
                 $money('EOI', 'Investment required', $fromUsd($eoi->investment_required_usd)),
                 $money('EOI', 'Investor amount', $fromUsd($eoi->investor_amount_usd)),
                 ...$profileOnly([
-                    $money('Profile', 'Current investment round', $fromLsl($p?->round_amount)),
-                    $money('Profile', 'Investor tickets (total)', $fromLsl($investorLsl)),
+                    $money('Profile', 'Lead investor amount (8.2.7)', $fromLsl($investorLsl)),
                     $proRow('Investor minimum (US$ '.number_format(EnterpriseProfile::minInvestorUsd()).')',
                         $investorLsl === null ? null : (EnterpriseProfile::meetsInvestorMinimum($investorLsl) ? 'Met' : 'Below the minimum'),
                         'Minimum M '.number_format(EnterpriseProfile::minInvestorLsl()),
                         $investorLsl === null ? null : (EnterpriseProfile::meetsInvestorMinimum($investorLsl) ? 'ok' : 'bad')),
-                    $money('Profile', 'CAFI matching grant ('.EnterpriseProfile::grantRatioLabel().' of investor)', $fromLsl($p?->grant_requested)),
+                    $money('Profile', 'CAFI matching grant ('.EnterpriseProfile::grantRatioLabel().')', $fromLsl($p?->grant_requested)),
+                    $proRow('CAFI grant requested on the EOI', $eoi->grant_requested_usd !== null ? $usdM($eoi->grant_requested_usd) : null,
+                        $eoi->grant_requested_usd !== null && $grantUsd ? ((float) $eoi->grant_requested_usd > $grantUsd + 1 ? 'More than the matching grant' : 'Within the matching grant') : null,
+                        $eoi->grant_requested_usd !== null && $grantUsd ? ((float) $eoi->grant_requested_usd > $grantUsd + 1 ? 'bad' : 'ok') : null),
+                    $proRow('Lifetime grant still available', $cumulative !== null ? $fromLsl($cumulative)[0] : null,
+                        $cumulative !== null && $p->previousGrantsLsl() > 0 ? 'Already approved: '.$fromLsl($p->previousGrantsLsl())[0] : 'No earlier CAFI grants',
+                        $cumulative !== null && $grant ? ($grant > $cumulative + 1 ? 'bad' : 'ok') : null),
                     $proRow('Total project cost', $fromLsl($p?->project_cost)[0],
                         ($fromLsl($p?->project_cost)[1] ?? '').($p?->project_cost !== null && $grant && (float) $p->project_cost < $grant ? ' — less than the CAFI grant' : ''),
                         $p?->project_cost !== null && $grant ? ((float) $p->project_cost < $grant ? 'bad' : 'ok') : null),
@@ -301,19 +330,30 @@ new class extends Component
                 $eoiRow('Intended use', $ls('use_of_funds', $eoi->use_of_funds), in_array('other', $eoi->use_of_funds ?? [], true) ? $eoi->use_of_funds_other : null),
                 $eoiRow('Description', $eoi->use_of_funds_description),
                 ...$profileOnly([
-                    $proRow('What the money is for', $p?->investment_purpose),
-                    $proRow('Grant utilisation budget', $budgetSet
-                        ? collect($p->budgetRows())->filter(fn ($r) => (float) ($r['private'] ?? 0) + (float) ($r['grant'] ?? 0) > 0)
-                            ->map(fn ($r) => $r['category'].': investor M '.number_format((float) ($r['private'] ?? 0)).' · CAFI grant M '.number_format((float) ($r['grant'] ?? 0)))
+                    $proRow('Transaction description (8.3.10)', $p?->tx_description ?: $p?->investment_purpose),
+                    $proRow('Grant budget by category (8.4 B)', $planSet
+                        ? collect($planTot['categories'])->filter(fn ($v) => $v > 0)
+                            ->map(fn ($v, $k) => (EnterpriseProfile::GRANT_CATEGORIES[$k][0] ?? $k).': '.$usdM($v)
+                                .' — '.collect($plan[$k] ?? [])->pluck('item')->filter()->implode(', '))
                             ->values()->all()
                         : null,
-                        $budgetSet ? 'Total: investor M '.number_format($budget['private']).' · CAFI grant M '.number_format($budget['grant']) : null),
-                    $proRow('Budget matches the funding', $budgetSet
+                        $planSet ? 'Total: '.$usdM($planTot['total']) : null),
+                    $proRow('Spent in Lesotho (C2)', $lesothoPct !== null ? $lesothoPct.'%' : null,
+                        $lesothoPct !== null
+                            ? ($planTot['outside'] > 0 ? 'Outside Lesotho: '.$usdM($planTot['outside']).($p->grant_outside_justification ? ' — “'.$p->grant_outside_justification.'”' : '') : 'All spent in Lesotho')
+                              .($lesothoPct < $minLesotho ? ' · below the '.$minLesotho.'% minimum' : '')
+                            : null,
+                        $lesothoPct !== null ? ($lesothoPct < $minLesotho ? 'bad' : 'ok') : null),
+                    $proRow('Budget checks', $planSet
                         ? collect([
-                            ['Investor column = investor amount (M '.number_format((float) $investorLsl).')', $investorLsl !== null && abs($budget['private'] - $investorLsl) < 1],
-                            ['CAFI grant column = matching grant (M '.number_format((float) $grant).')', $p->budgetMatchesGrant()],
+                            ['Grant budget within the matching grant ('.($grantUsd ? 'US$ '.number_format($grantUsd) : '—').')', $grantUsd !== null && $planTot['total'] <= $grantUsd + 1],
+                            ['At least '.$minLesotho.'% of the grant spent in Lesotho', $lesothoPct !== null && $lesothoPct >= $minLesotho],
+                            ['No double financing with another grant (C3)', $p->double_financing === false],
                         ])->all()
-                        : null),
+                        : null,
+                        $p?->double_financing ? 'Double financing declared: '.($p->double_financing_details ?: 'no details given') : null,
+                        $p?->double_financing ? 'bad' : null),
+                    $proRow('How the grant supports growth (C4)', $p?->grant_growth_support),
                 ]),
             ],
             'alignment' => [

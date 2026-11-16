@@ -10,6 +10,7 @@ use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\ComposeEmailController;
 use App\Http\Controllers\AccountSettingsController;
 use App\Http\Controllers\GrantReadinessController;
+use App\Http\Controllers\Gate4FileController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 
@@ -43,6 +44,7 @@ Route::middleware('auth')->group(function () {
     Route::get('/gate5/{review}/record', [\App\Http\Controllers\Gate5FileController::class, 'record'])->name('gate5.record');
     Route::get('/grant-readiness/{grantReadiness}/memo', [GrantReadinessController::class, 'memo'])->name('grant-readiness.memo');
     Route::get('/grant-readiness/{grantReadiness}/file/{file}', [GrantReadinessController::class, 'file'])->whereIn('file', ['agreement', 'bank_evidence'])->name('grant-readiness.file');
+    Route::get('/gate5/documents/{document}/download', [Gate4FileController::class, 'document'])->name('gate4.document');
     Route::get('/compose-email', [ComposeEmailController::class, 'index'])->name('compose.email');
     Route::get('/compose-email/{email}/attachment/{i}', [ComposeEmailController::class, 'attachment'])->whereNumber('i')->name('compose.email.attachment');
     Route::get('/investments/{investment}/proof', [\App\Http\Controllers\InvestmentProofController::class, 'download'])->name('investments.proof');

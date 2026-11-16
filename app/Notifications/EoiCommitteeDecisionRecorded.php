@@ -39,7 +39,7 @@ class EoiCommitteeDecisionRecorded extends Notification
         $rate    = (float) config('cif.usd_to_lsl', 18.00);
         $money   = fn ($v) => $v === null || $v === ''
             ? '—'
-            : 'M '.number_format((float) $v).' (US$ '.number_format((float) $v / max($rate, 0.0001)).')';
+            : 'US$ '.number_format((float) $v / max($rate, 0.0001)).' (M '.number_format((float) $v).')';
 
         $mail = (new MailMessage)
             ->subject('Committee decision: '.$label.' — '.$eoi->reference.($eoi->business_name ? ' ('.$eoi->business_name.')' : ''))
