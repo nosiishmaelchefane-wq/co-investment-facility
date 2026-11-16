@@ -98,7 +98,7 @@ class EoiReadyForCommittee extends Notification
             'Instrument'                => DueDiligence::INSTRUMENTS[$dd->instrument] ?? null,
             'Private capital committed' => $this->money($v['private'] ?: null),
             'CAFI grant'                => $this->money($v['grant'] ?: null)
-                .($expected ? ' — maximum '.EnterpriseProfile::grantRatioLabel().' of private capital = '.$this->money($expected) : ''),
+                .($expected ? ' — maximum under the grant rule ('.EnterpriseProfile::grantRatioLabel().') = '.$this->money($expected) : ''),
             'Total transaction'         => $this->money($v['total'] ?: null),
             'Total project cost'        => $p?->project_cost ? $this->money($p->project_cost) : null,
             'ESGC risk'                 => DueDiligence::RATINGS[$dd->esgc_category] ?? null,
@@ -116,9 +116,9 @@ class EoiReadyForCommittee extends Notification
         $memo = DueDiligence::memoRows($dd->memo);
         if (collect($memo)->contains(fn ($r) => filled(trim($r['text'])))) {
             $mail->line('### Investment Appraisal Memorandum');
-            foreach (DueDiligence::MEMO_QUESTIONS as $k => [$title, $question]) {
+            foreach (DueDiligence::memoQuestions($dd->memo) as $k => [$title, $question]) {
                 $answer = trim($memo[$k]['text']);
-                $mail->line('**'.$this->num($k).'. '.$title.'** — *'.$question.'*')
+                $mail->line('**'.(array_search($k, array_keys($memo), true) + 1).'. '.$title.'** — *'.$question.'*')
                      ->line($answer !== '' ? $this->flat($answer, 700) : 'Not answered.');
             }
         }
@@ -190,12 +190,12 @@ class EoiReadyForCommittee extends Notification
         return array_search($key, array_keys(DueDiligence::MEMO_QUESTIONS), true) + 1;
     }
 
-    /** Maloti → "M 900,000 (US$ 50,000)" */
+    /** Maloti → "US$ 50,000 (M 900,000)" */
     protected function money($lsl): string
     {
         $rate = max((float) config('cif.usd_to_lsl', 18.00), 0.0001);
 
-        return $lsl === null || $lsl === '' ? '—' : 'M '.number_format((float) $lsl).' (US$ '.number_format((float) $lsl / $rate).')';
+        return $lsl === null || $lsl === '' ? '—' : 'US$ '.number_format((float) $lsl / $rate).' (M '.number_format((float) $lsl).')';
     }
 
     /** The memorandum PDF, or null if it can't be generated (e-mail still goes out) */

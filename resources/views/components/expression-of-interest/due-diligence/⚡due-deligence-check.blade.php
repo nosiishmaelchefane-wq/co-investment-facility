@@ -22,10 +22,15 @@ use Livewire\Component;
 |   <livewire:expression-of-interest.due-diligence.due-deligence-check :eoi-id="$eoi->id" />
 |
 |   1 Checklist (6 areas: status + findings) · 2 Key figures · 3 Conditions · 4 Summary + memorandum · 5 Outcome
+|   Submitted information follows the enterprise profile (application form v2): 8.2 lead investor · 8.3 transaction ·
+|   8.4 grant-only budget in US$. Amounts are shown in US$ first, Maloti underneath.
 |   PMU (gate2.assess) edits — saved automatically — and records the outcome.
 |
 |   Investment Appraisal Memorandum — written here, not uploaded:
-|     5 questions, drafted automatically from the checklist, key figures, conditions and the enterprise profile.
+|     5 sections named after the enterprise profile side bar (Company & contact · Legal status & markets ·
+|     Employees & key people · Business & financials · Attachments & declaration), drafted automatically from the
+|     checklist, key figures, conditions and the enterprise profile. Each section must be verified by an officer
+|     ("Verify"); any change to its text clears the verification. Proceed needs all five verified.
 |     Answers the officer has not edited are redrafted every time the assessment changes; edited answers are kept
 |     ("Redraft" puts the automatic text back). gate2.assess / gate2.memo can edit. Download as PDF.
 |
@@ -101,10 +106,10 @@ new class extends Component
         return $this->isOpenForWork && (auth()->user()->can('gate2.memo') || auth()->user()->can('gate2.assess'));
     }
 
-    /** All five memorandum questions answered */
+    /** All five memorandum sections answered and verified by an officer */
     public function memoDone(): bool
     {
-        return DueDiligence::memoComplete($this->form['memo'] ?? []);
+        return DueDiligence::memoVerified($this->form['memo'] ?? []);
     }
 
     /* ---------------- Submitted information per checklist area ---------------- */
@@ -116,8 +121,9 @@ new class extends Component
             'registration_in_progress' => 'Registration in progress', 'not_registered' => 'Not registered',
         ],
         'annual_turnover' => [
-            'below_500k' => 'Below M500,000', '500k_2m' => 'M500,000 – M2 million', '2m_5m' => 'M2 – M5 million',
-            '5m_10m' => 'M5 – M10 million', 'above_10m' => 'Above M10 million',
+            'below_500k' => 'Below M500,000 (≈ US$ 28,000)', '500k_2m' => 'M500,000 – M2 million (≈ US$ 28,000 – 111,000)',
+            '2m_5m' => 'M2 – M5 million (≈ US$ 111,000 – 278,000)', '5m_10m' => 'M5 – M10 million (≈ US$ 278,000 – 556,000)',
+            'above_10m' => 'Above M10 million (≈ US$ 556,000)',
         ],
         'investment_types' => ['equity' => 'Equity', 'quasi_equity' => 'Quasi-equity', 'debt' => 'Debt'],
         'use_of_funds' => [
@@ -136,9 +142,9 @@ new class extends Component
 
     /** Profile attachments relevant to each checklist area */
     protected const AREA_DOCS = [
-        'enterprise'  => ['registration_cert', 'registration_undertaking', 'foreign_registration', 'business_extract', 'shareholders_list', 'good_standing', 'ids', 'team_resumes', 'tax_clearance'],
-        'investor'    => ['commitment', 'cap_table', 'shareholders_list'],
-        'transaction' => ['commitment', 'cap_table', 'budget', 'business_plan', 'pitch_deck'],
+        'enterprise'  => ['registration_cert', 'registration_undertaking', 'foreign_registration', 'business_extract', 'traders_licence', 'shareholders_list', 'good_standing', 'ids', 'team_resumes', 'tax_clearance'],
+        'investor'    => ['commitment', 'investor_evidence', 'cap_table', 'shareholders_list'],
+        'transaction' => ['commitment', 'cap_table', 'budget', 'quotation', 'business_plan', 'pitch_deck'],
         'financial'   => ['financials', 'projections', 'business_plan', 'pitch_deck'],
         'esgc'        => ['employee_list'],
         'risk'        => ['ids', 'business_extract', 'team_resumes'],
@@ -160,8 +166,14 @@ new class extends Component
         $num   = fn ($v) => $v === null || $v === '' ? null : number_format((float) $v);
         $yn    = fn ($v) => $v === null ? null : ($v ? 'Yes' : 'No');
         $ynp   = fn ($v) => $P::YES_NO_PROGRESS[$v ?? ''] ?? null;
-        $usdM  = fn ($usd) => $usd === null ? [null, null] : ['M '.number_format((float) $usd * $rate), 'US$ '.number_format((float) $usd)];
-        $lslM  = fn ($lsl) => $lsl === null ? [null, null] : ['M '.number_format((float) $lsl), 'US$ '.number_format((float) $lsl / $rate)];
+        // Money: US$ first, Maloti underneath (EOI and the 8.4 budget are US$; other profile amounts are stored in Maloti)
+        $usdM  = fn ($usd) => $usd === null ? [null, null] : ['US$ '.number_format((float) $usd), '≈ M '.number_format((float) $usd * $rate)];
+        $lslM  = fn ($lsl) => $lsl === null ? [null, null] : ['US$ '.number_format((float) $lsl / $rate), '≈ M '.number_format((float) $lsl)];
+        $usdLine = fn ($usd) => 'US$ '.number_format((float) $usd).' (≈ M '.number_format((float) $usd * $rate).')';
+        // An amount in the currency the applicant used → US$ (the original shown in brackets when it was not US$)
+        $inCur = fn ($amount, $cur) => $amount === null ? null
+            : 'US$ '.number_format((float) $P::toLsl((float) $amount, $cur ?: 'LSL') / $rate)
+              .(($cur ?: 'LSL') !== 'USD' ? ' (entered as '.($P::CURRENCIES[$cur ?: 'LSL'][1] ?? 'M').' '.number_format((float) $amount).')' : '');
 
         $eoiRow = fn ($label, $value, $sub = null, $flag = null) => [$label, $value, 'EOI', $sub, $flag];
         $proRow = fn ($label, $value, $sub = null, $flag = null) => [$label, $value, 'Profile', $sub, $flag];
@@ -171,24 +183,24 @@ new class extends Component
             ->map(fn ($r) => trim($r['name'].' — '.collect($parts)->map(fn ($fmt, $k) => filled($r[$k] ?? null) ? sprintf($fmt, $r[$k]) : null)->filter()->implode(' · '), ' —'))
             ->all() ?: null;
 
-        $investorRows = collect($p?->investorRows() ?? []);
-        $investors = $investorRows
-            ->map(fn ($r) => $r['name']
-                .(filled($r['id_number'] ?? null) ? ' · ID/Reg. '.$r['id_number'] : '')
-                .(filled($r['country'] ?? null) ? ' ('.$r['country'].')' : '')
-                .(is_numeric($r['ticket'] ?? null) ? ' — M '.number_format((float) $r['ticket']).' (US$ '.number_format((float) $r['ticket'] / $rate).')' : ' — no amount'))
-            ->all() ?: null;
-        $missingIds = $investorRows->contains(fn ($r) => blank($r['id_number'] ?? null));
 
         $history = collect($p?->investment_history ?? [])
-            ->map(fn ($h, $k) => ($P::FUNDING_SOURCES[$k] ?? $k).': '.(filled($h['amount'] ?? null) ? 'M '.number_format((float) $h['amount']) : '—')
+            ->map(fn ($h, $k) => ($P::FUNDING_SOURCES[$k] ?? $k).': '.(filled($h['amount'] ?? null) ? $lslM((float) $h['amount'])[0].' ('.$lslM((float) $h['amount'])[1].')' : '—')
                 .(filled($h['date'] ?? null) ? ' (last '.\Illuminate\Support\Carbon::parse($h['date'])->format('M Y').')' : ''))
             ->values()->all() ?: null;
 
         $investorLsl = $p?->investorAmount();
         $grant       = $p?->grant_requested !== null ? (float) $p->grant_requested : null;
-        $budget      = $p?->budgetTotals() ?? ['private' => 0, 'grant' => 0];
-        $budgetSet   = $p && ($budget['private'] > 0 || $budget['grant'] > 0);
+        $grantUsd    = $grant !== null ? $grant / $rate : null;
+        $plan        = (array) ($p?->grant_plan ?? []);
+        $planTot     = $P::planTotals($plan);                       // US$
+        $planSet     = $planTot['total'] > 0;
+        $lesothoPct  = $planSet ? round(($planTot['total'] - $planTot['outside']) / $planTot['total'] * 100, 1) : null;
+        $minLesotho  = $P::minLesothoPct();
+        $engagement  = $P::TRANSACTION_STATUSES[$p?->transaction_status ?? ''] ?? $p?->transaction_status;
+        $instrument  = $P::PARTICIPATION[$p?->participation ?? ''] ?? $p?->participation;
+        $cumulative  = $p?->availableCumulativeLsl();
+        $flag        = fn (?bool $ok) => $ok === null ? null : ($ok ? 'ok' : 'bad');
         $breakdown   = $p?->employeeBreakdownTotal();
         $shareTotal  = $p?->shareholderTotal() ?? 0;
         $esFlags     = $p && $p->es_checklist ? $p->esScreening() : [];
@@ -240,12 +252,18 @@ new class extends Component
                 $money('EOI', 'Investor amount', $usdM($eoi->investor_amount_usd)),
                 ...$prof([
                     $proRow('Has a participating investor', $yn($p?->has_investor), null, $p?->has_investor === false ? 'bad' : ($p?->has_investor ? 'ok' : null)),
-                    $proRow('Investors in the round', $investors, $missingIds ? 'Some investors have no ID / passport / registration number' : null, $missingIds ? 'bad' : null),
-                    $proRow('Lead investor type', $p?->investor_type),
-                    $money('Profile', 'Current investment round', $lslM($p?->round_amount)),
+                    $proRow('Lead investor (8.2.1)', $p?->lead_investor_name ?: $p?->investor_name,
+                        collect([$p?->investor_type, $p?->lead_investor_country])->filter()->implode(' · ') ?: null),
+                    $proRow('Investor contact (8.2.2 – 8.2.4)', collect([
+                            $p?->lead_investor_contact_name, $p?->lead_investor_email, $p?->lead_investor_phone, $p?->lead_investor_website,
+                        ])->filter()->values()->all() ?: null),
+                    $proRow('Investment amount (8.2.7)', $inCur($p?->lead_investor_amount, $p?->investment_currency)),
+                    $proRow('Engagement status (8.2.8)', $engagement),
+                    $proRow('Investor has committed (8.2.9)', $P::COMMITMENT[$p?->investor_commitment ?? ''] ?? null, null,
+                        match ($p?->investor_commitment) { 'yes' => 'ok', 'no' => 'bad', default => null }),
                     $proRow('Investor minimum (US$ '.number_format($P::minInvestorUsd()).')',
                         $investorLsl === null ? null : ($P::meetsInvestorMinimum($investorLsl) ? 'Met' : 'Below the minimum'),
-                        $investorLsl === null ? null : 'Investor tickets: M '.number_format($investorLsl).' (US$ '.number_format($investorLsl / $rate).')',
+                        $investorLsl === null ? null : 'Investor amount: '.$usdLine($investorLsl / $rate),
                         $investorLsl === null ? null : ($P::meetsInvestorMinimum($investorLsl) ? 'ok' : 'bad')),
                     $proRow('Investment history', $p ? EnterpriseInvestment::summaryLine($p->investments) : null),
                     $proRow('Investor track record (whole facility)', $p ? (EnterpriseInvestment::trackRecordLines($p) ?: null) : null),
@@ -260,23 +278,46 @@ new class extends Component
                 $eoiRow('Intended use', $ls('use_of_funds', $eoi->use_of_funds), in_array('other', $eoi->use_of_funds ?? [], true) ? $eoi->use_of_funds_other : null),
                 $eoiRow('Planned use', $eoi->use_of_funds_description),
                 ...$prof([
-                    $proRow('Financing type', $P::PARTICIPATION[$p?->participation ?? ''] ?? $p?->participation),
-                    $proRow('Status of the deal', $P::TRANSACTION_STATUSES[$p?->transaction_status ?? ''] ?? null),
+                    $proRow('Investment instrument (8.3.1)', $instrument, $p?->participation === 'debt' ? 'Debt is not eligible for co-investment' : null,
+                        $p?->participation === 'debt' ? 'bad' : null),
+                    $proRow('Amount agreed with the investor (8.3.2)', $yn($p?->tx_amount_agreed),
+                        $p?->tx_amount_agreed && $p->tx_amount !== null ? 'Agreed amount: '.$inCur($p->tx_amount, $p->investment_currency) : null,
+                        $p?->tx_amount_agreed === null ? null : $flag($p->tx_amount_agreed)),
+                    $proRow('Terms agreed (8.3.4)', $yn($p?->tx_terms_agreed), null, $p?->tx_terms_agreed === null ? null : $flag($p->tx_terms_agreed)),
+                    $proRow('Valuation (8.3.5 – 8.3.7)', $inCur($p?->valuation, $p?->investment_currency),
+                        collect([$P::VALUATION_BY[$p?->valuation_by ?? ''] ?? null, $P::VALUATION_METHODS[$p?->valuation_method ?? ''] ?? null])->filter()->implode(' · ') ?: null),
+                    $proRow('Expected close / deployment (8.3.8)', $p?->expected_close),
+                    $proRow('Material conditions outstanding (8.3.9)', $yn($p?->tx_conditions_outstanding), null,
+                        $p?->tx_conditions_outstanding === null ? null : $flag(! $p->tx_conditions_outstanding)),
+                    $proRow('Transaction description (8.3.10)', $p?->tx_description ?: $p?->investment_purpose),
                     $money('Profile', 'CAFI matching grant ('.$P::grantRatioLabel().')', $lslM($grant)),
+                    $proRow('CAFI grant requested on the EOI', $eoi->grant_requested_usd !== null ? $usdLine($eoi->grant_requested_usd) : null,
+                        $eoi->grant_requested_usd !== null && $grantUsd ? ((float) $eoi->grant_requested_usd > $grantUsd + 1 ? 'More than the matching grant' : 'Within the matching grant') : null,
+                        $eoi->grant_requested_usd !== null && $grantUsd ? $flag((float) $eoi->grant_requested_usd <= $grantUsd + 1) : null),
                     $proRow('Total project cost', $lslM($p?->project_cost)[0],
                         ($lslM($p?->project_cost)[1] ?? '').($p?->project_cost !== null && $grant && (float) $p->project_cost < $grant ? ' — less than the CAFI grant' : ''),
                         $p?->project_cost !== null && $grant ? ((float) $p->project_cost < $grant ? 'bad' : 'ok') : null),
-                    $proRow('What the money is for', $p?->investment_purpose),
-                    $proRow('Grant utilisation budget', $budgetSet
-                        ? collect($p->budgetRows())->filter(fn ($r) => (float) ($r['private'] ?? 0) + (float) ($r['grant'] ?? 0) > 0)
-                            ->map(fn ($r) => $r['category'].': investor M '.number_format((float) ($r['private'] ?? 0)).' · CAFI grant M '.number_format((float) ($r['grant'] ?? 0)))
+                    $proRow('Grant budget by category (8.4 B)', $planSet
+                        ? collect($planTot['categories'])->filter(fn ($v) => $v > 0)
+                            ->map(fn ($v, $k) => ($P::GRANT_CATEGORIES[$k][0] ?? $k).': '.$usdLine($v)
+                                .(collect($plan[$k] ?? [])->pluck('item')->filter()->isNotEmpty() ? ' — '.collect($plan[$k])->pluck('item')->filter()->implode(', ') : ''))
                             ->values()->all()
                         : null,
-                        $budgetSet ? 'Total: investor M '.number_format($budget['private']).' · CAFI grant M '.number_format($budget['grant']) : null),
-                    $proRow('Budget matches the funding', $budgetSet ? [
-                        ['Investor column = investor amount (M '.number_format((float) $investorLsl).')', $investorLsl !== null && abs($budget['private'] - $investorLsl) < 1],
-                        ['CAFI grant column = matching grant (M '.number_format((float) $grant).')', $p->budgetMatchesGrant()],
-                    ] : null),
+                        $planSet ? 'Total: '.$usdLine($planTot['total']) : null),
+                    $proRow('Spent in Lesotho (C2)', $lesothoPct !== null ? $lesothoPct.'%' : null,
+                        $lesothoPct !== null
+                            ? ($planTot['outside'] > 0 ? 'Outside Lesotho: '.$usdLine($planTot['outside']).($p->grant_outside_justification ? ' — “'.$p->grant_outside_justification.'”' : '') : 'All spent in Lesotho')
+                              .($lesothoPct < $minLesotho ? ' · below the '.$minLesotho.'% minimum' : '')
+                            : null,
+                        $lesothoPct !== null ? $flag($lesothoPct >= $minLesotho) : null),
+                    $proRow('Budget checks', $planSet ? [
+                        ['Grant budget within the matching grant ('.($grantUsd ? 'US$ '.number_format($grantUsd) : '—').')', $grantUsd !== null && $planTot['total'] <= $grantUsd + 1],
+                        ['At least '.$minLesotho.'% of the grant spent in Lesotho', $lesothoPct !== null && $lesothoPct >= $minLesotho],
+                        ['No double financing with another grant (C3)', $p->double_financing === false],
+                    ] : null,
+                        $p?->double_financing ? 'Double financing declared: '.($p->double_financing_details ?: 'no details given') : null,
+                        $p?->double_financing ? 'bad' : null),
+                    $proRow('How the grant supports growth (C4)', $p?->grant_growth_support),
                 ]),
             ],
             'financial' => [
@@ -314,6 +355,11 @@ new class extends Component
                     $proRow('Environmental & social flags', $esFlags ? collect($esFlags)->map(fn ($f) => $esLevel[$f[0]].' · '.$f[2])->all() : ($p?->es_checklist ? 'None' : null),
                         null, $p?->esDisqualified() ? 'bad' : ($p?->es_checklist && ! $esFlags ? 'ok' : null)),
                     $proRow('Prior CAFI grant support', $p?->labels($P::PRIOR_SUPPORT, $p?->prior_cafi_support), 'Check for double financing'),
+                    $proRow('Other grant on the same budget (8.4 C3)', $yn($p?->double_financing), $p?->double_financing ? $p->double_financing_details : null,
+                        $p?->double_financing === null ? null : $flag(! $p->double_financing)),
+                    $proRow('Lifetime CAFI grant still available', $cumulative !== null ? $lslM($cumulative)[0] : null,
+                        $cumulative !== null && $p->previousGrantsLsl() > 0 ? 'Already approved: '.$lslM($p->previousGrantsLsl())[0] : 'No earlier CAFI grants',
+                        $cumulative !== null && $grant ? $flag($grant <= $cumulative + 1) : null),
                     $proRow('Profile declaration', $p?->declaration_agreed ? 'Signed' : 'Not signed',
                         $p?->declared_name ? $p->declared_name.($p->declared_on ? ' · '.$p->declared_on->format('d M Y') : '') : null, $p?->declaration_agreed ? 'ok' : 'bad'),
                 ]),
@@ -368,6 +414,9 @@ new class extends Component
         foreach (['private_amount', 'grant_amount'] as $n) {
             $f[$n] = $f[$n] !== null && $f[$n] !== '' ? (float) $f[$n] : null;
         }
+        // Key figures are entered in US$; the columns keep Maloti (used by Gates 3–7)
+        $f['private_usd'] = $f['private_amount'] !== null ? (string) round($f['private_amount'] / $this->rate()) : '';
+        $f['grant_usd']   = $f['grant_amount'] !== null ? (string) round($f['grant_amount'] / $this->rate()) : '';
         $f['assessed_on'] = $f['assessed_on'] ?: now()->toDateString();
         $f['memo']        = DueDiligence::memoRows($f['memo'] ?? []);
 
@@ -389,6 +438,13 @@ new class extends Component
             return;
         }
 
+        // Key figures typed in US$ → stored in Maloti
+        if (in_array($name, ['form.private_usd', 'form.grant_usd'], true) && $this->canEdit) {
+            $col = $name === 'form.private_usd' ? 'private_amount' : 'grant_amount';
+            $usd = $this->form[$name === 'form.private_usd' ? 'private_usd' : 'grant_usd'] ?? '';
+            $this->form[$col] = is_numeric($usd) ? round((float) $usd * $this->rate(), 2) : null;
+        }
+
         // Memorandum answers (gate2.memo can edit these too). A typed answer is marked "edited" and is no longer redrafted;
         // clearing an answer hands it back to the automatic draft.
         if (Str::startsWith($name, 'form.memo.')) {
@@ -398,7 +454,10 @@ new class extends Component
             }
             $key = explode('.', $name)[2] ?? null;
             if (isset(DueDiligence::MEMO_QUESTIONS[$key])) {
-                $this->form['memo'][$key]['edited'] = trim((string) ($this->form['memo'][$key]['text'] ?? '')) !== '';
+                // Compare with the saved text: a change clears the section's verification
+                $saved = DueDiligence::memoRows($this->dd?->memo ?? [])[$key];
+                $text  = (string) ($this->form['memo'][$key]['text'] ?? '');
+                $this->form['memo'][$key] = DueDiligence::memoRow($saved, $text, trim($text) !== '');
             }
             $this->persist();
             return;
@@ -427,6 +486,37 @@ new class extends Component
     }
 
     /* ---------------- Memorandum ---------------- */
+
+    /** The officer confirms a section of the memorandum after checking the automatic text */
+    public function verifyMemo(string $key): void
+    {
+        abort_unless($this->canMemo, 403);
+        abort_unless(isset(DueDiligence::MEMO_QUESTIONS[$key]), 404);
+
+        if (blank(trim((string) ($this->form['memo'][$key]['text'] ?? '')))) {
+            $this->dispatch('notify', type: 'warning', message: 'Write or redraft this section before verifying it.');
+            return;
+        }
+
+        $this->form['memo'][$key]['verified']    = true;
+        $this->form['memo'][$key]['verified_by'] = auth()->user()->name;
+        $this->form['memo'][$key]['verified_at'] = now()->toDateTimeString();
+        $this->persist();
+
+        $this->dispatch('notify', type: 'success', message: DueDiligence::MEMO_QUESTIONS[$key][0].' verified.');
+    }
+
+    /** Undo a verification (e.g. clicked by mistake) */
+    public function unverifyMemo(string $key): void
+    {
+        abort_unless($this->canMemo, 403);
+        abort_unless(isset(DueDiligence::MEMO_QUESTIONS[$key]), 404);
+
+        $this->form['memo'][$key]['verified']    = false;
+        $this->form['memo'][$key]['verified_by'] = null;
+        $this->form['memo'][$key]['verified_at'] = null;
+        $this->persist();
+    }
 
     /** Put the automatic text back for one question (or all five), replacing any edits */
     public function redraftMemo(?string $key = null): void
@@ -582,6 +672,12 @@ new class extends Component
 
     /* ---------------- Internals ---------------- */
 
+    /** Maloti per US dollar */
+    protected function rate(): float
+    {
+        return max((float) config('cif.usd_to_lsl', 18.00), 0.0001);
+    }
+
     protected function persist(bool $updateEoi = true): DueDiligence
     {
         // Keep the automatic memorandum answers in step with the assessment (edited answers are left alone)
@@ -680,8 +776,9 @@ new class extends Component
     $req      = $this->isApplicant ? [] : $this->requested;
     $evidence = $this->isApplicant || ! $this->gateOpen ? [] : $this->evidence;
     $rate     = (float) config('cif.usd_to_lsl', 18.00);
-    $m        = fn ($x) => $x === null || $x === '' ? '—' : 'M '.number_format((float) $x);
-    $u        = fn ($x) => $x === null || $x === '' ? '' : 'US$ '.number_format((float) $x / max($rate, 0.0001));
+    // Amounts are stored in Maloti and shown in US$ first, Maloti underneath
+    $m        = fn ($x) => $x === null || $x === '' ? '—' : 'US$ '.number_format((float) $x / max($rate, 0.0001));
+    $u        = fn ($x) => $x === null || $x === '' ? '' : '≈ M '.number_format((float) $x);
 @endphp
 
 {{-- ======================= LOCKED ======================= --}}
@@ -885,14 +982,20 @@ new class extends Component
                 </select>
             </div>
             <div class="col-md-4">
-                <label class="form-label small fw-semibold">Private capital committed (M)</label>
-                <input type="number" min="0" step="1000" class="form-control form-control-sm" wire:model.blur="form.private_amount" @disabled(! $canEdit)>
+                <label class="form-label small fw-semibold">Private capital committed (US$)</label>
+                <div class="input-group input-group-sm">
+                    <span class="input-group-text">US$</span>
+                    <input type="number" min="0" step="1000" class="form-control" wire:model.blur="form.private_usd" @disabled(! $canEdit)>
+                </div>
                 <div class="dd-hint text-muted mt-1">{{ $u($form['private_amount']) }} · Only signed, eligible commitments. Applicant stated {{ $m($req['private'] ?? null) }}</div>
             </div>
             <div class="col-md-4">
-                <label class="form-label small fw-semibold">CAFI grant (M)</label>
-                <input type="number" min="0" step="1000" class="form-control form-control-sm" wire:model.blur="form.grant_amount" @disabled(! $canEdit)>
-                <div class="dd-hint text-muted mt-1">{{ $u($form['grant_amount']) }} · {{ \App\Models\EnterpriseProfile::grantRatioLabel() }} of the validated investor amount = {{ $m(\App\Models\EnterpriseProfile::matchingGrant(is_numeric($form['private_amount'] ?? null) ? (float) $form['private_amount'] : null)) }}</div>
+                <label class="form-label small fw-semibold">CAFI grant (US$)</label>
+                <div class="input-group input-group-sm">
+                    <span class="input-group-text">US$</span>
+                    <input type="number" min="0" step="1000" class="form-control" wire:model.blur="form.grant_usd" @disabled(! $canEdit)>
+                </div>
+                <div class="dd-hint text-muted mt-1">{{ $u($form['grant_amount']) }} · grant rule ({{ \App\Models\EnterpriseProfile::grantRatioLabel() }}) on the validated investor amount = {{ $m(\App\Models\EnterpriseProfile::matchingGrant(is_numeric($form['private_amount'] ?? null) ? (float) $form['private_amount'] : null)) }}</div>
             </div>
             <div class="col-md-4">
                 <label class="form-label small fw-semibold">ESGC risk</label>
@@ -908,7 +1011,7 @@ new class extends Component
         @endif
         <div class="callout small mt-3 mb-0">
             <i class="bi bi-calculator me-1"></i>
-            Total transaction (private capital + CAFI grant): <strong>{{ $m($v['total']) }}</strong> <span class="text-muted">({{ $u($v['total']) }})</span>
+            Total transaction (private capital + CAFI grant): <strong>{{ $m($v['total']) }}</strong> <span class="text-muted">{{ $u($v['total']) }}</span>
         </div>
     </section>
 
@@ -983,26 +1086,27 @@ new class extends Component
             <div class="me-auto">
                 <div class="fw-semibold text-navy">Investment Appraisal Memorandum</div>
                 <div class="small text-muted">
-                    Drafted automatically from your checklist findings, key figures, conditions and the enterprise profile — it updates as you assess.
-                    Change any answer as needed; edited answers are kept.
+                    One section per enterprise profile section, drafted automatically from the profile, your checklist findings, key figures and conditions — it updates as you assess.
+                    Read each section, change it if needed, then click <strong>Verify</strong>. Changing the text clears the verification.
                 </div>
             </div>
-            <span class="pill {{ $memoDone ? 'pill-ok' : 'pill-warn' }}">{{ $answered }} / {{ count($DD::MEMO_QUESTIONS) }} answered</span>
+            <span class="pill {{ $answered === count($memo) ? 'pill-ok' : 'pill-warn' }}">{{ $answered }} / {{ count($memo) }} answered</span>
+            <span class="pill {{ $memoDone ? 'pill-ok' : 'pill-warn' }}"><i class="bi bi-patch-check"></i> {{ $DD::memoVerifiedCount($form['memo'] ?? []) }} / {{ count($memo) }} verified</span>
             @if ($canMemo)
                 <button type="button" class="btn btn-sm btn-outline-secondary" wire:click="redraftMemo" wire:loading.attr="disabled" wire:target="redraftMemo"
-                        wire:confirm="Replace all five answers — including your edits — with the automatic draft?">
+                        wire:confirm="Replace all five sections — including your edits and verifications — with the automatic draft?">
                     <i class="bi bi-arrow-repeat me-1"></i> Redraft all
                 </button>
             @endif
         </div>
 
-        @foreach ($DD::MEMO_QUESTIONS as $mk => [$mTitle, $mQuestion])
+        @foreach ($DD::memoQuestions($form['memo'] ?? []) as $mk => [$mTitle, $mQuestion])
             @php $row = $memo[$mk]; @endphp
-            <div class="border rounded-3 p-3 mb-2" wire:key="memo-{{ $mk }}">
+            <div class="border rounded-3 p-3 mb-2 {{ $row['verified'] ? 'border-success' : '' }}" wire:key="memo-{{ $mk }}">
                 <div class="d-flex align-items-start gap-2 mb-2">
                     <span class="section-no flex-shrink-0">{{ $loop->iteration }}</span>
                     <div class="flex-grow-1">
-                        <div class="fw-semibold text-navy">{{ $mTitle }}</div>
+                        <div class="fw-semibold text-navy"><i class="bi {{ \App\Models\EnterpriseProfile::SECTIONS[$mk][1] ?? 'bi-dot' }} me-1"></i>{{ $mTitle }}</div>
                         <div class="small text-muted">{{ $mQuestion }}</div>
                     </div>
                     @if ($row['edited'])
@@ -1017,8 +1121,33 @@ new class extends Component
                         <span class="pill pill-muted" title="Drafted from the assessment — updates automatically until you edit it"><i class="bi bi-magic"></i> Auto-drafted</span>
                     @endif
                 </div>
-                <textarea rows="5" class="form-control form-control-sm" wire:model.blur="form.memo.{{ $mk }}.text" @disabled(! $canMemo)
+                <textarea rows="{{ $mk === 'business' ? 12 : 6 }}" class="form-control form-control-sm" wire:model.blur="form.memo.{{ $mk }}.text" @disabled(! $canMemo)
                           placeholder="Answer for the Investment Committee"></textarea>
+
+                {{-- Verification by the officer --}}
+                <div class="d-flex flex-wrap align-items-center gap-2 mt-2">
+                    @if ($row['verified'])
+                        <span class="pill pill-ok"><i class="bi bi-patch-check-fill"></i> Verified</span>
+                        <span class="small text-muted">
+                            {{ $row['verified_by'] ?: 'Officer' }}@if ($row['verified_at']) · {{ \Illuminate\Support\Carbon::parse($row['verified_at'])->format('d M Y H:i') }}@endif
+                        </span>
+                        @if ($canMemo)
+                            <button type="button" class="btn btn-sm btn-link text-secondary text-decoration-none ms-auto" wire:click="unverifyMemo('{{ $mk }}')"
+                                    wire:loading.attr="disabled" wire:target="unverifyMemo('{{ $mk }}')">
+                                <i class="bi bi-arrow-counterclockwise me-1"></i> Undo
+                            </button>
+                        @endif
+                    @else
+                        <span class="pill pill-warn"><i class="bi bi-hourglass-split"></i> Not verified</span>
+                        <span class="small text-muted">Check the text against the profile and your assessment.</span>
+                        @if ($canMemo)
+                            <button type="button" class="btn btn-sm btn-outline-success ms-auto" wire:click="verifyMemo('{{ $mk }}')"
+                                    wire:loading.attr="disabled" wire:target="verifyMemo('{{ $mk }}')" @disabled(blank(trim($row['text'])))>
+                                <i class="bi bi-check2-circle me-1"></i> Verify section
+                            </button>
+                        @endif
+                    @endif
+                </div>
             </div>
         @endforeach
 

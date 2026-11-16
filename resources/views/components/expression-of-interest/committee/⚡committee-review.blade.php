@@ -39,6 +39,10 @@ use Livewire\Component;
 |     Scorecards and pack comments stay hidden until every non-recused member has submitted; then they're consolidated.
 |     The outcome can only be recorded once scoring is complete.
 |     Approve / Conditional → grant_readiness (Gate 4 · Grant readiness) · Defer → ic_deferred (PMU resubmits → new round) · Reject → not_progressed
+|   Secretary (gate3.decide) — each member's card has two buttons while the round is open:
+|     Edit     → the secretary corrects that member's scorecard (autosaved; its submitted state is kept;
+|                "Edited by <secretary>" is shown on it)
+|     Reopen   → a submitted scorecard goes back to draft so the member can change and resubmit it
 |   Templates: resources/views/expression-of-interest/committee/partials/*
 |
 |   E-mails (sent after the change is saved; a failed e-mail never undoes it):
@@ -69,8 +73,12 @@ new class extends Component
     /** New question being logged */
     public array $newQuestion = ['asked_by' => '', 'question' => '', 'answer' => ''];
 
-    /** My Appendix F scorecard (gate3.score) */
+    /** My Appendix F scorecard (gate3.score) — or, while the secretary edits one, that member's */
     public array $card = [];
+
+    /** The member whose scorecard the secretary is editing (null = my own) */
+    #[Locked]
+    public ?int $editingMemberId = null;
 
     /** PMU's response when resubmitting a deferred case */
     public string $resubmissionNote = '';
@@ -101,7 +109,7 @@ new class extends Component
     public function review(): ?CommitteeReview
     {
         return $this->reviewId
-            ? CommitteeReview::with('scorecards.user:id,name', 'secretary:id,name', 'decider:id,name')->find($this->reviewId)
+            ? CommitteeReview::with('scorecards.user:id,name', 'scorecards.editor:id,name', 'secretary:id,name', 'decider:id,name')->find($this->reviewId)
             : null;
     }
 
@@ -134,8 +142,10 @@ new class extends Component
         $p    = $this->profile;
         $P    = EnterpriseProfile::class;
         $rate = (float) config('cif.usd_to_lsl', 18.00);
-        $lsl  = fn ($v) => $v === null || $v === '' ? null : 'M '.number_format((float) $v).' (≈ US$ '.number_format((float) $v / max($rate, 0.0001)).')';
-        $usd  = fn ($v) => $v === null || $v === '' ? null : 'M '.number_format((float) $v * $rate).' (≈ US$ '.number_format((float) $v).')';
+        // US$ first, Maloti in brackets ($lsl: a Maloti amount · $usd: a US$ amount)
+        $lsl  = fn ($v) => $v === null || $v === '' ? null : 'US$ '.number_format((float) $v / max($rate, 0.0001)).' (≈ M '.number_format((float) $v).')';
+        $usd  = fn ($v) => $v === null || $v === '' ? null : 'US$ '.number_format((float) $v).' (≈ M '.number_format((float) $v * $rate).')';
+        $plan = $p ? EnterpriseProfile::planTotals((array) ($p->grant_plan ?? [])) : ['total' => 0, 'outside' => 0, 'categories' => []];
         $yn   = fn ($v) => $v === null ? null : ($v ? 'Yes' : 'No');
 
         $facts = [
@@ -159,14 +169,20 @@ new class extends Component
                 $p ? ['Competition', $p->competition, 'Profile'] : null,
             ]),
             'Investment' => array_filter([
-                $p ? ['Investors in the round', collect($p->investorRows())->map(fn ($r) => $r['name'].(filled($r['id_number'] ?? null) ? ' (ID/Reg. '.$r['id_number'].')' : '').(filled($r['ticket'] ?? null) ? ' — M '.number_format((float) $r['ticket']) : ''))->implode('; ') ?: $eoi->investor_name, 'Profile'] : ['Investor', $eoi->investor_name, 'EOI'],
-                $p ? ['Financing type', $P::PARTICIPATION[$p->participation ?? ''] ?? null, 'Profile'] : null,
-                $p ? ['Current investment round', $lsl($p->round_amount), 'Profile'] : ['Investor amount', $usd($eoi->investor_amount_usd), 'EOI'],
+                $p ? ['Lead investor', ($p->lead_investor_name ?: $p->investor_name ?: $eoi->investor_name)
+                        .(collect([$p->investor_type, $p->lead_investor_country])->filter()->isNotEmpty() ? ' ('.collect([$p->investor_type, $p->lead_investor_country])->filter()->implode(', ').')' : ''), 'Profile']
+                   : ['Investor', $eoi->investor_name, 'EOI'],
+                $p ? ['Investment instrument', $P::PARTICIPATION[$p->participation ?? ''] ?? null, 'Profile'] : null,
+                $p ? ['Investor engagement · commitment', collect([$P::TRANSACTION_STATUSES[$p->transaction_status ?? ''] ?? null, isset($P::COMMITMENT[$p->investor_commitment ?? '']) ? 'committed: '.strtolower($P::COMMITMENT[$p->investor_commitment]) : null])->filter()->implode(' · ') ?: null, 'Profile'] : null,
+                $p ? ['Investment amount from the investor', $lsl($p->investorAmount()), 'Profile'] : ['Investor amount', $usd($eoi->investor_amount_usd), 'EOI'],
                 $p ? ['CAFI matching grant ('.$P::grantRatioLabel().')', $lsl($p->grant_requested), 'Profile'] : null,
+                $eoi->grant_requested_usd !== null ? ['CAFI grant requested', $usd($eoi->grant_requested_usd), 'EOI'] : null,
+                $p && $plan['total'] > 0 ? ['Grant budget (8.4)', collect($plan['categories'])->filter(fn ($x) => $x > 0)->map(fn ($x, $k) => ($P::GRANT_CATEGORIES[$k][0] ?? $k).' '.$usd($x))->implode('; ').' — total '.$usd($plan['total']), 'Profile'] : null,
+                $p?->expected_close ? ['Expected close', $p->expected_close, 'Profile'] : null,
                 $p ? ['Investment history', \App\Models\EnterpriseInvestment::summaryLine($p->investments), 'Profile'] : null,
                 $p ? ['Investor track record (whole facility)', implode('; ', \App\Models\EnterpriseInvestment::trackRecordLines($p)) ?: null, 'Facility'] : null,
                 ['Total investment required', $usd($eoi->investment_required_usd), 'EOI'],
-                ['Planned use of the investment', $p?->investment_purpose ?: $eoi->use_of_funds_description, $p?->investment_purpose ? 'Profile' : 'EOI'],
+                ['Transaction description', $p?->tx_description ?: ($p?->investment_purpose ?: $eoi->use_of_funds_description), ($p?->tx_description || $p?->investment_purpose) ? 'Profile' : 'EOI'],
                 $p ? ['Total project cost', $lsl($p->project_cost), 'Profile'] : null,
                 $p ? ['Annual revenue (past year)', $lsl($p->annual_revenue), 'Profile'] : null,
             ]),
@@ -213,7 +229,7 @@ new class extends Component
         $f    = $dd->toForm();
         $v    = DueDiligence::validated($f);
         $rate = max((float) config('cif.usd_to_lsl', 18.00), 0.0001);
-        $m    = fn ($x) => (float) $x > 0 ? 'M '.number_format((float) $x).' (US$ '.number_format((float) $x / $rate).')' : '—';
+        $m    = fn ($x) => (float) $x > 0 ? 'US$ '.number_format((float) $x / $rate).' (M '.number_format((float) $x).')' : '—';
         $memo = DueDiligence::memoRows($dd->memo);
         $pdf  = route('due-diligence.memorandum', $dd);
 
@@ -240,8 +256,10 @@ new class extends Component
             ]))],
             'iam' => [
                 'present' => DueDiligence::memoComplete($dd->memo) || (bool) $dd->iam_path,
-                'status'  => DueDiligence::memoComplete($dd->memo) ? ['5 / 5 answered', 'pill-ok'] : ($dd->iam_path ? ['Uploaded document', 'pill-muted'] : ['Incomplete', 'pill-warn']),
-                'lines'   => collect(DueDiligence::MEMO_QUESTIONS)->map(fn ($q, $k) => [$q[0], trim($memo[$k]['text']) ?: 'Not answered.', $q[1]])->values()->all(),
+                'status'  => DueDiligence::memoComplete($dd->memo)
+                    ? (DueDiligence::isLegacyMemo($dd->memo) ? ['5 / 5 answered', 'pill-ok'] : [DueDiligence::memoVerifiedCount($dd->memo).' / 5 verified', DueDiligence::memoVerified($dd->memo) ? 'pill-ok' : 'pill-warn'])
+                    : ($dd->iam_path ? ['Uploaded document', 'pill-muted'] : ['Incomplete', 'pill-warn']),
+                'lines'   => collect(DueDiligence::memoQuestions($dd->memo))->map(fn ($q, $k) => [$q[0], trim($memo[$k]['text'] ?? '') ?: 'Not answered.', $q[1]])->values()->all(),
                 'link'    => $pdf,
             ],
             'enterprise'  => $area('enterprise'),
@@ -254,7 +272,7 @@ new class extends Component
             'risk'        => $area('risk'),
             'calculation' => ['present' => true, 'status' => null, 'link' => null, 'lines' => [
                 ['Private capital (validated)', $m($v['private'])],
-                ['CAFI grant', $m($v['grant']).($expected ? ' — maximum '.EnterpriseProfile::grantRatioLabel().' of private capital = '.$m($expected) : '')],
+                ['CAFI grant', $m($v['grant']).($expected ? ' — maximum under the grant rule ('.EnterpriseProfile::grantRatioLabel().') = '.$m($expected) : '')],
                 ['Total transaction', $m($v['total'])],
             ]],
             'conditions'  => ['present' => true, 'status' => [$dd->conditions->where('status', 'open')->count().' open', $dd->conditions->where('status', 'open')->count() ? 'pill-warn' : 'pill-ok'], 'link' => null,
@@ -333,6 +351,13 @@ new class extends Component
     public function canRecord(): bool
     {
         return ! $this->isApplicant && $this->isOpen && auth()->user()->can('gate3.decide');
+    }
+
+    /** The secretary is editing a member's scorecard */
+    #[Computed]
+    public function canEditMember(): bool
+    {
+        return $this->editingMemberId !== null && $this->canRecord;
     }
 
     #[Computed]
@@ -417,12 +442,14 @@ new class extends Component
             'rationale'      => (string) ($data['rationale'] ?? ''),
             'actions'        => (string) ($data['actions'] ?? ''),
         ];
+        $this->decision['private_usd'] = $this->decision['private_amount'] !== null ? (string) round($this->decision['private_amount'] / $this->usdRate()) : '';
+        $this->decision['grant_usd']   = $this->decision['grant_amount'] !== null ? (string) round($this->decision['grant_amount'] / $this->usdRate()) : '';
     }
 
-    protected function loadCard(): void
+    protected function loadCard(?int $userId = null): void
     {
         $c = $this->reviewId
-            ? CommitteeScorecard::where('committee_review_id', $this->reviewId)->where('user_id', auth()->id())->first()
+            ? CommitteeScorecard::where('committee_review_id', $this->reviewId)->where('user_id', $userId ?? auth()->id())->first()
             : null;
 
         $this->card = [
@@ -446,10 +473,17 @@ new class extends Component
     public function updated(string $name): void
     {
         if (Str::startsWith($name, 'card')) {
-            if ($this->canScore) {
+            if ($this->canEditMember || ($this->editingMemberId === null && $this->canScore)) {
                 $this->saveCard();
             }
             return;
+        }
+
+        // Decision amounts are typed in US$ and stored in Maloti (read by Gates 4–7)
+        if (in_array($name, ['decision.private_usd', 'decision.grant_usd'], true) && $this->canRecord) {
+            $col = $name === 'decision.private_usd' ? 'private_amount' : 'grant_amount';
+            $usd = $this->decision[$name === 'decision.private_usd' ? 'private_usd' : 'grant_usd'] ?? '';
+            $this->decision[$col] = is_numeric($usd) ? round((float) $usd * $this->usdRate(), 2) : null;
         }
 
         if (Str::startsWith($name, ['meeting', 'criteria', 'deliberation', 'conditions', 'decision'])) {
@@ -462,15 +496,23 @@ new class extends Component
         }
     }
 
+    /** Maloti per US dollar */
+    protected function usdRate(): float
+    {
+        return max((float) config('cif.usd_to_lsl', 18.00), 0.0001);
+    }
+
     /* =====================================================================
      | Scorecard (gate3.score)
      ===================================================================== */
 
     protected function saveCard(bool $submit = false): CommitteeScorecard
     {
-        $review = $this->ensureReview();
+        $review   = $this->ensureReview();
+        $onBehalf = $this->canEditMember;                       // the secretary correcting a member's scorecard
+        $userId   = $onBehalf ? $this->editingMemberId : auth()->id();
 
-        $card = CommitteeScorecard::firstOrNew(['committee_review_id' => $review->id, 'user_id' => auth()->id()]);
+        $card = CommitteeScorecard::firstOrNew(['committee_review_id' => $review->id, 'user_id' => $userId]);
         $card->fill([
             'coi'                => $this->card['coi'] ?: null,
             'coi_details'        => trim($this->card['coi_details']) ?: null,
@@ -483,8 +525,14 @@ new class extends Component
             'issues'             => trim($this->card['issues']) ?: null,
             'recommendation'     => $this->card['recommendation'] ?: null,
             'takeaways'          => trim($this->card['takeaways']) ?: null,
-            'submitted_at'       => $submit ? now() : null,
-        ])->save();
+            // The secretary's corrections keep the member's submitted state; the member's own save sets it
+            'submitted_at'       => $onBehalf ? $card->submitted_at : ($submit ? now() : null),
+        ]);
+        if ($onBehalf) {
+            $card->edited_by = auth()->id();
+            $card->edited_at = now();
+        }
+        $card->save();
 
         $this->savedAt = now()->format('H:i');
         unset($this->review, $this->myCard, $this->status, $this->revealed, $this->blockers);
@@ -495,6 +543,11 @@ new class extends Component
     public function submitScorecard(): void
     {
         abort_unless($this->canScore, 403, 'You cannot submit a scorecard for this transaction.');
+
+        if ($this->editingMemberId !== null) {   // finish editing a member's scorecard first
+            $this->cancelMemberEdit();
+            return;
+        }
 
         $recused = $this->card['coi'] === 'recused';
 
@@ -554,6 +607,61 @@ new class extends Component
             );
             $this->dispatch('notify', type: 'info', message: 'All scorecards are in — the consolidated scorecard is now visible. '.$note);
         }
+    }
+
+    /* =====================================================================
+     | Secretary: correct or reopen a member's scorecard (gate3.decide)
+     ===================================================================== */
+
+    /** Open a member's scorecard for the secretary to correct */
+    public function editMemberCard(int $userId): void
+    {
+        abort_unless($this->canRecord && $this->members->contains('id', $userId), 403);
+
+        $this->resetValidation();
+        $this->editingMemberId = $userId;
+        $this->loadCard($userId);
+        unset($this->canEditMember);
+        $this->dispatch('scroll-to', target: '#g3-scorecard');
+    }
+
+    /** Stop editing the member's scorecard (changes are already saved) and go back to my own */
+    public function cancelMemberEdit(): void
+    {
+        $this->editingMemberId = null;
+        $this->resetValidation();
+        $this->loadCard();
+        unset($this->canEditMember, $this->review, $this->status, $this->revealed, $this->blockers);
+    }
+
+    public function finishMemberEdit(): void
+    {
+        $name = $this->members->firstWhere('id', $this->editingMemberId)?->name ?? 'the member';
+        $this->cancelMemberEdit();
+        $this->dispatch('notify', type: 'success', message: "Changes to {$name}'s scorecard are saved.");
+    }
+
+    /** Send a submitted scorecard back to the member so they can change and resubmit it */
+    public function reopenMemberCard(int $userId): void
+    {
+        abort_unless($this->canRecord && $this->members->contains('id', $userId), 403);
+
+        $card = CommitteeScorecard::where('committee_review_id', $this->reviewId)->where('user_id', $userId)->first();
+        if (! $card?->isSubmitted()) {
+            $this->dispatch('notify', type: 'warning', message: 'That scorecard has not been submitted, so the member can already edit it.');
+            return;
+        }
+
+        $card->update(['submitted_at' => null, 'reopened_by' => auth()->id(), 'reopened_at' => now()]);
+
+        if ($userId === auth()->id() || $this->editingMemberId === $userId) {
+            $this->editingMemberId = null;
+            $this->loadCard();
+        }
+        unset($this->review, $this->myCard, $this->status, $this->revealed, $this->blockers, $this->canScore, $this->canEditMember);
+
+        $name = $this->members->firstWhere('id', $userId)?->name ?? 'The member';
+        $this->dispatch('notify', type: 'success', message: "{$name}'s scorecard is open again — they can change it and submit it again.");
     }
 
     /** "3 information pack comments, 2 scores, your recommendation" — from the failed field names */
@@ -626,13 +734,15 @@ new class extends Component
 
         $this->validate([
             'decision.outcome'        => ['required', Rule::in(array_keys(CommitteeReview::OUTCOMES))],
-            'decision.private_amount' => ['required', 'numeric', 'min:0'],
-            'decision.grant_amount'   => [in_array($this->decision['outcome'], ['approve', 'conditional'], true) ? 'required' : 'nullable', 'numeric', 'min:0'],
+            'decision.private_usd'    => ['required', 'numeric', 'min:0'],
+            'decision.grant_usd'      => [in_array($this->decision['outcome'], ['approve', 'conditional'], true) ? 'required' : 'nullable', 'numeric', 'min:0'],
             'decision.rationale'      => ['required', 'string', 'max:5000'],
             'decision.actions'        => [$this->decision['outcome'] === 'defer' ? 'required' : 'nullable', 'string', 'max:3000'],
             'meeting.meeting_date'    => ['required', 'date', 'before_or_equal:today'],
         ], [
             'decision.outcome.required'      => 'Choose the Committee outcome.',
+            'decision.private_usd.required'  => 'Enter the private investment in US$.',
+            'decision.grant_usd.required'    => 'Enter the recommended CAFI grant in US$.',
             'decision.rationale.required'    => 'Record the rationale for the decision.',
             'decision.actions.required'      => 'Specify what must be done before resubmission.',
             'meeting.meeting_date.required'  => 'Enter the meeting date.',
@@ -754,18 +864,36 @@ new class extends Component
      | Internals
      ===================================================================== */
 
+    /**
+     * The Committee record for this round, created on first use.
+     * Another user (a member scoring, or the secretary) may have created it after this page was opened,
+     * so look it up first, and if two saves race, use the row the other one created
+     * (expression_of_interest_id + round is unique).
+     */
     protected function ensureReview(): CommitteeReview
     {
-        if ($this->reviewId) {
-            return CommitteeReview::findOrFail($this->reviewId);
+        if ($this->reviewId && ($review = CommitteeReview::find($this->reviewId))) {
+            return $review;
         }
 
-        $review = CommitteeReview::create(array_merge(CommitteeReview::prefill($this->eoi, $this->dd), $this->recordData(), [
-            'expression_of_interest_id' => $this->eoiId,
-            'due_diligence_id'          => $this->dd?->id,
-            'round'                     => $this->round,
-            'secretary_id'              => $this->secretary?->id ?? (auth()->user()->can('gate3.decide') ? auth()->id() : null),
-        ]));
+        $existing = fn () => CommitteeReview::where('expression_of_interest_id', $this->eoiId)->where('round', $this->round)->first();
+
+        $review = $existing();
+        if (! $review) {
+            try {
+                $review = CommitteeReview::create(array_merge(CommitteeReview::prefill($this->eoi, $this->dd), $this->recordData(), [
+                    'expression_of_interest_id' => $this->eoiId,
+                    'due_diligence_id'          => $this->dd?->id,
+                    'round'                     => $this->round,
+                    'secretary_id'              => $this->secretary?->id ?? (auth()->user()->can('gate3.decide') ? auth()->id() : null),
+                ]));
+            } catch (\Illuminate\Database\QueryException $e) {
+                // 23000 = duplicate key: created by someone else a moment ago
+                if (($e->errorInfo[0] ?? null) !== '23000' || ! ($review = $existing())) {
+                    throw $e;
+                }
+            }
+        }
 
         $this->reviewId = $review->id;
 
@@ -827,6 +955,14 @@ new class extends Component
     $decided   = (bool) $review?->isDecided();
     $cards     = $review?->scorecards->keyBy('user_id') ?? collect();
     $myCard    = $this->myCard;
+
+    // Secretary correcting a member's scorecard: the scorecard and pack comments show that member's card
+    $editingOther = $this->canEditMember;
+    $cardOwner    = $editingOther ? $members->firstWhere('id', $this->editingMemberId) : auth()->user();
+    if ($editingOther) {
+        $myCard   = $cards->get($this->editingMemberId);
+        $canScore = true;
+    }
     $blockers  = $this->isApplicant ? [] : $this->blockers;
     $history   = $this->isApplicant ? collect() : $this->history;
     $submission = $this->isApplicant || ! $this->gateOpen ? ['facts' => [], 'docs' => []] : $this->submission;
@@ -837,8 +973,9 @@ new class extends Component
     $validated = $dd ? $DD::validated($ddForm) : ['total' => 0, 'private' => 0, 'grant' => 0, 'structure' => null];
 
     $rate = (float) config('cif.usd_to_lsl', 18.00);
-    $m    = fn ($v) => $v === null || $v === '' ? '—' : 'M '.number_format((float) $v);
-    $u    = fn ($v) => $v === null || $v === '' ? '' : 'US$ '.number_format((float) $v / max($rate, 0.0001));
+    // Amounts are stored in Maloti: $m = US$ (main) · $u = Maloti equivalent
+    $m    = fn ($v) => $v === null || $v === '' ? '—' : 'US$ '.number_format((float) $v / max($rate, 0.0001));
+    $u    = fn ($v) => $v === null || $v === '' ? '' : '≈ M '.number_format((float) $v);
 
     // Gate 3 path
     $path = [
@@ -973,7 +1110,7 @@ new class extends Component
     @include('expression-of-interest.committee.partials.pack')
     @include('expression-of-interest.committee.partials.submission')
     @include('expression-of-interest.committee.partials.glance')
-    @if ($isMember && ($review === null || ! $decided || $myCard))
+    @if ($editingOther || ($isMember && ($review === null || ! $decided || $myCard)))
         @include('expression-of-interest.committee.partials.scorecard')
     @endif
     @include('expression-of-interest.committee.partials.consolidated')

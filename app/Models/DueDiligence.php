@@ -88,16 +88,43 @@ class DueDiligence extends Model
     ];
 
     /**
-     * Investment Appraisal Memorandum (§3.3) — the five questions the transaction appraisal answers.
-     * key => [short title, question]
+     * Investment Appraisal Memorandum (§3.3) — one section per enterprise profile section (the profile side bar),
+     * each drafted automatically from the profile, the EOI and the officer's assessment, then verified by the officer.
+     * The five appraisal questions of §3.3 are answered inside these sections:
+     *   genuine transaction, investor commitment, structure & amount, use of grant → Business & financials
+     *   remaining risks & conditions                                               → Attachments & declaration
+     * key (= EnterpriseProfile::SECTIONS key) => [title (profile side bar), what the section confirms]
      */
     public const MEMO_QUESTIONS = [
+        'company'     => ['Company & contact',         'Is the enterprise legitimate and operating — registration, stage, sector, activity and contact person?'],
+        'legal'       => ['Legal status & markets',    'Are the legal form, ownership, tax status and markets in order for the Facility?'],
+        'people'      => ['Employees & key people',    'Can the team deliver the growth plan, and are the jobs, management and environmental & social risks acceptable?'],
+        'business'    => ['Business & financials',     'Is there a genuine, evidenced transaction with an eligible structure and amount, and a clearly defined, programme-compliant use of the CAFI grant?'],
+        'attachments' => ['Attachments & declaration', 'Are the documents and declarations in order, and are the remaining risks and conditions understood well enough for Investment Committee consideration?'],
+    ];
+
+    /** The five questions used before the memorandum followed the profile sections (memos saved before the change) */
+    public const LEGACY_MEMO_QUESTIONS = [
         'genuine'   => ['Genuine transaction',            'Is there a genuine investment transaction between the enterprise and the identified investor?'],
         'evidenced' => ['Investor commitment',            'Is the transaction sufficiently developed and evidenced to demonstrate credible investor commitment?'],
         'structure' => ['Structure & amount',             "Is the proposed investment structure and amount appropriate in relation to the enterprise's financing requirement and growth plan?"],
         'use'       => ['Use of private capital & grant', 'Is the proposed use of private capital and CAFI grant funding clearly defined and programme-compliant?'],
         'risks'     => ['Remaining risks & conditions',   'Are the remaining transaction risks and conditions sufficiently understood to allow the transaction to proceed to Investment Committee consideration?'],
     ];
+
+    /** A memo saved with the earlier five questions (and none of the profile sections) */
+    public static function isLegacyMemo(?array $memo): bool
+    {
+        $keys = array_keys((array) $memo);
+
+        return array_intersect($keys, array_keys(self::LEGACY_MEMO_QUESTIONS)) !== [] && array_intersect($keys, array_keys(self::MEMO_QUESTIONS)) === [];
+    }
+
+    /** The sections a saved memo uses (earlier memos keep their five questions for display and the PDF) */
+    public static function memoQuestions(?array $memo): array
+    {
+        return self::isLegacyMemo($memo) ? self::LEGACY_MEMO_QUESTIONS : self::MEMO_QUESTIONS;
+    }
 
     /** EOI "use of funds" labels (for the memorandum) */
     protected const USE_OF_FUNDS = [
@@ -207,7 +234,7 @@ class DueDiligence extends Model
             $v['private'] <= 0 || $v['grant'] <= 0 ? 'Enter the private capital and the CAFI grant.' : null,
             blank($form['esgc_category'] ?? null) ? 'Set the ESGC risk category.' : null,
             blank($form['summary'] ?? null) || blank($form['key_risks'] ?? null) ? 'Complete the summary and key risks for the Committee.' : null,
-            ! $hasIam ? 'Complete the Investment Appraisal Memorandum — all five questions need an answer.' : null,
+            ! $hasIam ? 'Complete and verify the Investment Appraisal Memorandum — all five sections need an answer and an officer’s verification.' : null,
             ...collect($conditions)->filter(fn ($c) => DueDiligenceCondition::blocks($c))
                 ->map(fn ($c) => 'Open: '.($c['finding'] ?: 'untitled condition').' — must be resolved before the Committee.')->values()->all(),
         ]));
@@ -215,35 +242,76 @@ class DueDiligence extends Model
 
     /* ---------------- Investment Appraisal Memorandum ---------------- */
 
-    /** Memo rows for every question: key => ['text' => string, 'edited' => bool] */
-    public static function memoRows(?array $memo): array
+    /**
+     * Memo rows for every section:
+     *   key => ['text' => string, 'edited' => bool, 'verified' => bool, 'verified_by' => ?string, 'verified_at' => ?string]
+     * "edited" = written or changed by the officer (no longer redrafted automatically).
+     * "verified" = an officer has checked the section; any change to its text clears it.
+     */
+    public static function memoRows(?array $memo, bool $current = false): array
     {
-        return collect(self::MEMO_QUESTIONS)->mapWithKeys(fn ($q, $k) => [$k => [
-            'text'   => (string) ($memo[$k]['text'] ?? ''),
-            'edited' => (bool) ($memo[$k]['edited'] ?? false),
+        $questions = $current ? self::MEMO_QUESTIONS : self::memoQuestions($memo);
+
+        return collect($questions)->mapWithKeys(fn ($q, $k) => [$k => [
+            'text'        => (string) ($memo[$k]['text'] ?? ''),
+            'edited'      => (bool) ($memo[$k]['edited'] ?? false),
+            'verified'    => (bool) ($memo[$k]['verified'] ?? false),
+            'verified_by' => $memo[$k]['verified_by'] ?? null,
+            'verified_at' => $memo[$k]['verified_at'] ?? null,
         ]])->all();
     }
 
-    /** All five questions answered */
+    /** Every section has an answer */
     public static function memoComplete(?array $memo): bool
     {
         return collect(self::memoRows($memo))->every(fn ($r) => filled(trim($r['text'])));
     }
 
+    /** Every section has an answer and has been verified by an officer */
+    public static function memoVerified(?array $memo): bool
+    {
+        if (self::isLegacyMemo($memo)) {
+            return self::memoComplete($memo);   // written before verification existed
+        }
+
+        return collect(self::memoRows($memo))->every(fn ($r) => filled(trim($r['text'])) && $r['verified']);
+    }
+
+    /** Number of verified sections */
+    public static function memoVerifiedCount(?array $memo): int
+    {
+        return collect(self::memoRows($memo))->filter(fn ($r) => filled(trim($r['text'])) && $r['verified'])->count();
+    }
+
+    /** A row with new text: verification is cleared when the text changes */
+    public static function memoRow(array $row, string $text, bool $edited): array
+    {
+        $changed = trim($text) !== trim((string) ($row['text'] ?? ''));
+
+        return [
+            'text'        => $text,
+            'edited'      => $edited,
+            'verified'    => $changed ? false : (bool) ($row['verified'] ?? false),
+            'verified_by' => $changed ? null : ($row['verified_by'] ?? null),
+            'verified_at' => $changed ? null : ($row['verified_at'] ?? null),
+        ];
+    }
+
     /**
-     * Refresh the answers that the officer has not edited, from the assessment and the profile.
-     * Edited answers are kept as they are ($force = true redrafts those too).
+     * Refresh the sections that the officer has not edited, from the assessment and the profile.
+     * Edited sections are kept as they are ($force = true redrafts those too). A section whose text changes loses its verification.
      */
     public static function refreshMemo(array $form, array $conditions, ExpressionOfInterest $eoi, ?EnterpriseProfile $p, ?string $only = null, bool $force = false): array
     {
         $draft = self::draftMemo($form, $conditions, $eoi, $p);
 
-        return collect(self::memoRows($form['memo'] ?? []))->map(function ($row, $k) use ($draft, $only, $force) {
+        // An open assessment with a memo in the earlier five-question format starts again in the profile sections
+        return collect(self::memoRows($form['memo'] ?? [], current: true))->map(function ($row, $k) use ($draft, $only, $force) {
             if ($only !== null && $k !== $only) {
                 return $row;
             }
 
-            return $row['edited'] && ! $force ? $row : ['text' => $draft[$k], 'edited' => false];
+            return $row['edited'] && ! $force ? $row : self::memoRow($row, $draft[$k], false);
         })->all();
     }
 
@@ -254,7 +322,8 @@ class DueDiligence extends Model
     public static function draftMemo(array $form, array $conditions, ExpressionOfInterest $eoi, ?EnterpriseProfile $p): array
     {
         $rate  = max((float) config('cif.usd_to_lsl', 18.00), 0.0001);
-        $m     = fn ($lsl) => $lsl === null ? '—' : 'M '.number_format((float) $lsl).' (US$ '.number_format((float) $lsl / $rate).')';
+        $m     = fn ($lsl) => $lsl === null ? '—' : 'US$ '.number_format((float) $lsl / $rate).' (M '.number_format((float) $lsl).')';
+        $u     = fn ($usd) => 'US$ '.number_format((float) $usd).' (M '.number_format((float) $usd * $rate).')';
         $v     = self::validated($form);
         $name  = $p?->registered_name ?: $eoi->business_name ?: 'The enterprise';
         $stage = $form['stage'] ?? null;
@@ -275,17 +344,21 @@ class DueDiligence extends Model
         $join = fn (array $parts) => trim(implode(' ', array_filter(array_map('trim', $parts))));
 
         /* 1 · Genuine transaction */
-        $investors = collect($p?->investorRows() ?? [])->map(fn ($r) => $r['name']
-            .(filled($r['id_number'] ?? null) ? ' (ID/Reg. '.$r['id_number'].')' : '')
-            .(is_numeric($r['ticket'] ?? null) && (float) $r['ticket'] > 0 ? ' — '.$m($r['ticket']) : ''))->all();
-        $investorText = $investors ? implode('; ', $investors) : ($form['investor_names'] ?: $eoi->investor_name);
+        // Form v2 8.2: one lead investor
+        $lead         = $p?->lead_investor_name ?: $p?->investor_name;
+        $leadAmount   = $p?->investorAmount();
+        $leadInfo     = collect([$p?->investor_type, $p?->lead_investor_country])->filter()->implode(', ');
+        $investorText = $lead
+            ? $lead.($leadInfo ? " ({$leadInfo})" : '').($leadAmount ? ' — '.$m($leadAmount) : '')
+            : ($form['investor_names'] ?: $eoi->investor_name);
         $track = $p ? EnterpriseInvestment::trackRecordLines($p) : [];
 
         $genuine = $join([
             $investorText
-                ? "{$name} has identified the following investor(s) for this round: {$investorText}."
+                ? "{$name} has identified the following lead investor: {$investorText}."
                 : "{$name} has not identified a participating investor.",
-            $p?->investor_type ? 'Lead investor type: '.$p->investor_type.'.' : '',
+            $p?->lead_investor_contact_name || $p?->lead_investor_email
+                ? 'Investor contact: '.collect([$p->lead_investor_contact_name, $p->lead_investor_email, $p->lead_investor_phone])->filter()->implode(', ').'.' : '',
             $p?->has_investor === false ? 'On the enterprise profile the applicant states that it has no participating investor.' : '',
             $stage ? 'The transaction is at the '.strtolower(self::STAGES[$stage][0]).' stage.' : 'The transaction stage has not been recorded.',
             $track ? 'Investor track record on the facility: '.implode('; ', $track).'.' : '',
@@ -306,7 +379,13 @@ class DueDiligence extends Model
             $stage ? 'Stage: '.self::STAGES[$stage][0].' (expected evidence: '.strtolower(self::STAGES[$stage][1]).').' : '',
             $evidence ? 'The applicant reported the following evidence: '.implode(', ', $evidence).'.' : 'The applicant did not report formal evidence of commitment.',
             $commitmentDoc ? 'A term sheet / commitment document is on file ('.$commitmentDoc->original_name.').' : 'No term sheet or commitment document has been uploaded to the profile.',
-            $p?->transaction_status ? 'Deal status on the profile: '.(EnterpriseProfile::TRANSACTION_STATUSES[$p->transaction_status] ?? $p->transaction_status).'.' : '',
+            $p?->document('investor_evidence') ? 'Further evidence of investor engagement is on file ('.$p->document('investor_evidence')->original_name.').' : '',
+            $p?->transaction_status ? 'Investor engagement status on the profile: '.(EnterpriseProfile::TRANSACTION_STATUSES[$p->transaction_status] ?? $p->transaction_status).'.' : '',
+            $p?->investor_commitment ? 'Investor commitment (8.2.9): '.strtolower(EnterpriseProfile::COMMITMENT[$p->investor_commitment] ?? $p->investor_commitment).'.' : '',
+            $p?->tx_amount_agreed !== null ? 'Investment amount agreed with the investor: '.($p->tx_amount_agreed ? 'yes' : 'no').'.' : '',
+            $p?->tx_terms_agreed !== null ? 'Terms agreed: '.($p->tx_terms_agreed ? 'yes' : 'no').'.' : '',
+            $p?->tx_conditions_outstanding ? 'The applicant reports material conditions still outstanding before the investment is made.' : '',
+            $p?->expected_close ? 'Expected close / deployment: '.rtrim($p->expected_close, '.').'.' : '',
             $area('transaction'),
             match (true) {
                 ! $stage     => 'Conclusion: the stage of the transaction must be confirmed.',
@@ -316,7 +395,6 @@ class DueDiligence extends Model
         ]);
 
         /* 3 · Structure & amount */
-        $ratio      = EnterpriseProfile::grantRatio();
         $expected   = EnterpriseProfile::matchingGrant($v['private'] ?: null);
         $grantOk    = $expected !== null && $v['grant'] > 0 && $v['grant'] <= $expected + 1;
         $minOk      = $v['private'] > 0 && EnterpriseProfile::meetsInvestorMinimum($v['private']);
@@ -328,9 +406,11 @@ class DueDiligence extends Model
             'Validated private capital: '.$m($v['private'] ?: null).'; CAFI grant: '.$m($v['grant'] ?: null).'; total transaction: '.$m($v['total'] ?: null).'.',
             $v['private'] > 0 ? ($minOk ? 'The investor amount meets' : 'The investor amount is below').' the US$ '.number_format(EnterpriseProfile::minInvestorUsd()).' minimum.' : '',
             $expected !== null ? ($grantOk
-                ? 'The grant is within '.EnterpriseProfile::grantRatioLabel().' of the validated private capital (maximum '.$m($expected).').'
-                : 'The grant does not match the '.EnterpriseProfile::grantRatioLabel().' matching rule (maximum '.$m($expected).').') : '',
-            $p?->round_amount ? 'Current investment round: '.$m($p->round_amount).'.' : '',
+                ? 'The grant is within the CAFI grant rule ('.EnterpriseProfile::grantRatioLabel().') for the validated private capital — maximum '.$m($expected).', '.EnterpriseProfile::effectiveGrantPct($v['private']).'% of the investment.'
+                : 'The grant is more than the CAFI grant rule allows ('.EnterpriseProfile::grantRatioLabel().') — maximum '.$m($expected).'.') : '',
+            $leadAmount ? 'Lead investor amount on the profile: '.$m($leadAmount).'.' : '',
+            $p?->valuation ? 'Valuation: US$ '.number_format((float) EnterpriseProfile::toLsl((float) $p->valuation, $p->investment_currency ?: 'LSL') / $rate)
+                .(($vInfo = collect([EnterpriseProfile::VALUATION_BY[$p->valuation_by ?? ''] ?? null, EnterpriseProfile::VALUATION_METHODS[$p->valuation_method ?? ''] ?? null])->filter()->map(fn ($x) => strtolower($x))->implode(', ')) ? " ({$vInfo})" : '').'.' : '',
             $projectCost !== null ? 'Total project cost: '.$m($projectCost).($projectCost < $v['grant'] ? ' — less than the CAFI grant.' : '.') : '',
             $p?->annual_revenue ? 'Annual revenue (past year): '.$m($p->annual_revenue).'.' : '',
             $p?->company_stage ? 'Stage of the business: '.strtolower(EnterpriseProfile::STAGES[$p->company_stage] ?? $p->company_stage).'.' : '',
@@ -344,28 +424,41 @@ class DueDiligence extends Model
         ]);
 
         /* 4 · Use of private capital and grant */
-        $budget    = $p?->budgetRows() ?? [];
-        $totals    = EnterpriseProfile::sumBudget($budget);
-        $budgetSet = $totals['private'] > 0 || $totals['grant'] > 0;
-        $budgetLines = collect($budget)->filter(fn ($r) => (float) ($r['private'] ?? 0) + (float) ($r['grant'] ?? 0) > 0)
-            ->map(fn ($r) => $r['category'].' — investor M '.number_format((float) ($r['private'] ?? 0)).', grant M '.number_format((float) ($r['grant'] ?? 0)))->all();
-        $budgetPrivOk  = $budgetSet && abs($totals['private'] - $v['private']) < 1;
-        $budgetGrantOk = $budgetSet && abs($totals['grant'] - $v['grant']) < 1;
-        $uses = collect((array) $eoi->use_of_funds)->map(fn ($u) => self::USE_OF_FUNDS[$u] ?? $u)->all();
+        // Form v2 8.4: grant-only budget in US$ (older profiles: the Maloti grant column)
+        $plan      = (array) ($p?->grant_plan ?? []);
+        $planTot   = EnterpriseProfile::planTotals($plan);
+        $planUsd   = $planTot['total'] > 0 ? $planTot['total'] : (($p?->budgetTotals()['grant'] ?? 0) / $rate);
+        $budgetSet = $planUsd > 0;
+        $budgetLines = collect($planTot['categories'])->filter(fn ($x) => $x > 0)
+            ->map(fn ($x, $k) => (EnterpriseProfile::GRANT_CATEGORIES[$k][0] ?? $k).' '.$u($x)
+                .(collect($plan[$k] ?? [])->pluck('item')->filter()->isNotEmpty() ? ' ('.collect($plan[$k])->pluck('item')->filter()->implode(', ').')' : ''))
+            ->values()->all();
+        $budgetGrantOk = $budgetSet && $v['grant'] > 0 && $planUsd * $rate <= $v['grant'] + $rate;   // within the validated grant (to US$ 1)
+        $outsideUsd    = $planTot['total'] > 0 ? $planTot['outside'] : (float) ($p?->grant_outside_lesotho ?? 0) / $rate;
+        $lesothoPct    = $budgetSet ? round(($planUsd - $outsideUsd) / $planUsd * 100, 1) : null;
+        $minLesotho    = EnterpriseProfile::minLesothoPct();
+        $uses = collect((array) $eoi->use_of_funds)->map(fn ($x) => self::USE_OF_FUNDS[$x] ?? $x)->all();
+        $purpose = $p?->tx_description ?: ($p?->investment_purpose ?: $eoi->use_of_funds_description);
 
         $use = $join([
-            $p?->investment_purpose ? 'Purpose: '.rtrim($p->investment_purpose, '.').'.' : ($eoi->use_of_funds_description ? 'Purpose: '.rtrim($eoi->use_of_funds_description, '.').'.' : ''),
+            $purpose ? 'Transaction: '.rtrim($purpose, '.').'.' : '',
             $uses ? 'Intended use (EOI): '.implode(', ', $uses).'.' : '',
-            $budgetSet ? 'Grant utilisation budget: '.implode('; ', $budgetLines).'. Totals: investor M '.number_format($totals['private']).', CAFI grant M '.number_format($totals['grant']).'.'
+            $budgetSet ? 'Grant budget: '.($budgetLines ? implode('; ', $budgetLines).'. ' : '').'Total '.$u($planUsd).'.'
                        : 'The grant utilisation budget has not been completed.',
-            $budgetSet && ! $budgetPrivOk ? 'The investor column of the budget does not equal the validated private capital.' : '',
-            $budgetSet && ! $budgetGrantOk ? 'The grant column of the budget does not equal the validated CAFI grant.' : '',
+            $budgetSet && ! $budgetGrantOk ? 'The grant budget is more than the validated CAFI grant.' : '',
+            $lesothoPct !== null ? $lesothoPct.'% of the grant is to be spent in Lesotho'.($lesothoPct < $minLesotho ? ' — below the '.$minLesotho.'% minimum'.($p?->grant_outside_justification ? ' (reason given: '.rtrim($p->grant_outside_justification, '.').')' : '') : '').'.' : '',
+            $p?->double_financing ? 'The applicant declared that part of the budget is also financed by another grant or public source'.($p->double_financing_details ? ': '.rtrim($p->double_financing_details, '.') : '').'.' : '',
+            $p?->grant_growth_support ? 'How the grant supports growth: '.rtrim($p->grant_growth_support, '.').'.' : '',
             $p?->document('budget') ? 'An operational budget is on file.' : 'No operational budget has been uploaded.',
+            $p?->document('quotation') ? 'Supporting quotations are on file.' : '',
             $form['esgc_category'] ? 'ESGC risk category: '.self::RATINGS[$form['esgc_category']].'.' : '',
             $area('esgc'),
             match (true) {
                 ! $budgetSet                        => 'Conclusion: the use of funds is not yet clearly defined.',
-                ! $budgetPrivOk || ! $budgetGrantOk => 'Conclusion: the budget must be aligned with the validated amounts.',
+                ! $budgetGrantOk                    => 'Conclusion: the grant budget must be aligned with the validated CAFI grant.',
+                $lesothoPct !== null && $lesothoPct < $minLesotho && blank($p?->grant_outside_justification)
+                                                    => 'Conclusion: the share of the grant spent outside Lesotho must be justified.',
+                (bool) $p?->double_financing        => 'Conclusion: the declared double financing must be resolved before the Committee.',
                 default                             => 'Conclusion: the use of private capital and grant funding is clearly defined and programme-compliant.',
             },
         ]);
@@ -391,7 +484,104 @@ class DueDiligence extends Model
             },
         ]);
 
-        return ['genuine' => $genuine, 'evidenced' => $evidenced, 'structure' => $structure, 'use' => $use, 'risks' => $risks];
+        /* ===== Sections in the order of the enterprise profile side bar ===== */
+        $yn  = fn ($b) => $b === null ? null : ($b ? 'yes' : 'no');
+        $P   = EnterpriseProfile::class;
+
+        /* 1 · Company & contact */
+        $months  = $p?->monthsOperating();
+        $company = $join([
+            $p ? $name.($p->short_name ? ' (trading as '.$p->short_name.')' : '').'.' : "{$name} has not completed an enterprise profile.",
+            $p?->obfc_status ? 'Registered with the OBFC: '.strtolower($P::YES_NO_PROGRESS[$p->obfc_status] ?? $p->obfc_status)
+                .($p->registration_no ? ', registration no. '.$p->registration_no : '').($p->year_registered ? ', registered in '.$p->year_registered : '').'.' : '',
+            $p?->commencedLabel() ? 'Operating since '.$p->commencedLabel().($months !== null ? " ({$months} months)" : '').'.' : '',
+            $p?->company_stage ? 'Stage: '.strtolower($P::STAGES[$p->company_stage] ?? $p->company_stage).'.' : '',
+            $p?->sectorLabel() ? 'Sector: '.$p->sectorLabel().($p->sub_sector ? ' — '.$p->sub_sector : '').'.' : '',
+            collect([$p?->address, $p?->city, $p?->district])->filter()->isNotEmpty() ? 'Address: '.collect([$p->address, $p->city, $p->district])->filter()->implode(', ').'.' : '',
+            $p?->activity ? 'Activity: '.rtrim($p->activity, '.').'.' : '',
+            $p?->products_services ? 'Products & services: '.rtrim($p->products_services, '.').'.' : '',
+            $p?->labels($P::PRIOR_SUPPORT, $p?->prior_cafi_support) ? 'Earlier CAFI support: '.$p->labels($P::PRIOR_SUPPORT, $p->prior_cafi_support).'.' : '',
+            $p?->contact_name ? 'Contact: '.collect([$p->contact_name, $p->contact_title, $p->contact_email, $p->contact_phone])->filter()->implode(', ').'.' : '',
+            $area('enterprise'),
+            match (true) {
+                ! $p                                  => 'Conclusion: the enterprise profile must be completed.',
+                $p->obfc_status && $p->obfc_status !== 'yes' => 'Conclusion: OBFC registration must be completed before any grant is paid.',
+                $p->operatingUnderSixMonths()         => 'Conclusion: the enterprise has operated for less than six months — eligibility must be confirmed.',
+                ($form['areas']['enterprise']['status'] ?? null) === 'complete' => 'Conclusion: the enterprise is legitimate and operating.',
+                default                               => 'Conclusion: to be confirmed once the enterprise assessment is complete.',
+            },
+        ]);
+
+        /* 2 · Legal status & markets */
+        $shareTotal = $p?->shareholderTotal() ?? 0;
+        $holders    = collect($p?->shareholderRows() ?? [])->map(fn ($r) => $r['name'].(filled($r['percent'] ?? null) ? ' '.$r['percent'].'%' : ''))->all();
+        $legal = $join([
+            $p?->legal_form ? 'Legal form: '.$p->legal_form.'.' : '',
+            $p?->foreign_registered ? 'Also registered in '.($p->foreign_country ?: 'another country').($p->foreign_registration_no ? ' (no. '.$p->foreign_registration_no.')' : '').'.' : ($p?->foreign_registered === false ? 'Not registered in another country.' : ''),
+            $holders ? 'Shareholders: '.implode(', ', $holders).(abs($shareTotal - 100) >= 0.01 ? ' — the shareholding adds up to '.rtrim(rtrim(number_format($shareTotal, 2), '0'), '.').'%, not 100%' : '').'.'
+                     : ($p?->document('shareholders_list') ? 'The shareholder list is uploaded as a document.' : ''),
+            $p?->ownershipLine() ? 'Ownership: '.$p->ownershipLine().'.' : '',
+            $p?->foreign_owned !== null ? 'Foreign-owned: '.$yn($p->foreign_owned).($p->foreign_owned && $p->foreign_owned_pct !== null ? ' ('.$p->foreign_owned_pct.'%)' : '').'.' : '',
+            $p?->primary_ops_lesotho !== null ? 'Primary operations in Lesotho: '.$yn($p->primary_ops_lesotho).'.' : '',
+            $p?->rsl_tax_file ? 'Tax file with RSL: '.strtolower($P::YES_NO_PROGRESS[$p->rsl_tax_file] ?? $p->rsl_tax_file).'.' : '',
+            $p?->labels($P::MARKETS, $p?->markets) ? 'Markets: '.$p->labels($P::MARKETS, $p->markets).'.' : '',
+            $p?->ownership_dispute ? 'An ownership or management dispute was disclosed'.($p->ownership_dispute_details ? ': '.rtrim($p->ownership_dispute_details, '.') : '').'.' : '',
+            match (true) {
+                ! $p                                    => 'Conclusion: the legal status cannot be confirmed without a profile.',
+                $p->primary_ops_lesotho === false       => 'Conclusion: the main operations are outside Lesotho — eligibility must be confirmed.',
+                (bool) $p->ownership_dispute            => 'Conclusion: the disclosed dispute must be resolved or understood before the Committee.',
+                $p->rsl_tax_file && $p->rsl_tax_file !== 'yes' => 'Conclusion: the RSL tax registration must be completed.',
+                $holders && abs($shareTotal - 100) >= 0.01 => 'Conclusion: the shareholding must be confirmed.',
+                default                                 => 'Conclusion: the legal status, ownership and markets are in order.',
+            },
+        ]);
+
+        /* 3 · Employees & key people */
+        $esFlags2 = $p && $p->es_checklist ? $p->esScreening() : [];
+        $team     = collect($p?->keyPeopleRows() ?? [])->map(fn ($r) => $r['name'].(filled($r['position'] ?? null) ? ' ('.$r['position'].')' : ''))->all();
+        $people = $join([
+            $p?->employees !== null ? 'Employees: '.$p->employees.' now'.($p->employees_prev_year !== null ? ', '.$p->employees_prev_year.' a year ago' : '')
+                .' — full-time '.((int) $p->ft_male + (int) $p->ft_female).' ('.(int) $p->ft_female.' women), part-time '.((int) $p->pt_male + (int) $p->pt_female)
+                .', youth '.((int) $p->youth_male + (int) $p->youth_female).'.' : '',
+            $p?->expected_jobs !== null ? 'Expected new jobs: '.$p->expected_jobs.' (women '.(int) $p->expected_jobs_women.', youth '.(int) $p->expected_jobs_youth.').' : '',
+            $team ? 'Directors & key management: '.implode('; ', $team).'.' : '',
+            $p ? 'Women / youth owned or managed: women '.($yn($p->women_owned_managed) ?? '—').', youth '.($yn($p->youth_owned_managed) ?? '—').'.' : '',
+            $p?->es_checklist ? ($esFlags2 ? count($esFlags2).' environmental & social answer(s) need follow-up.' : 'No environmental & social issue was disclosed.') : '',
+            $p?->es_records_system ? 'E&S records: '.($P::ES_RECORD_SYSTEMS[$p->es_records_system] ?? $p->es_records_system).'.' : '',
+            $form['esgc_category'] ? 'ESGC risk category: '.self::RATINGS[$form['esgc_category']].'.' : '',
+            $area('esgc'),
+            match (true) {
+                $p?->esDisqualified()                  => 'Conclusion: an exclusion ground was disclosed — the transaction should not proceed.',
+                blank($form['esgc_category'] ?? null)  => 'Conclusion: the ESGC risk category must be set.',
+                $form['esgc_category'] === 'high'      => 'Conclusion: high ESGC risk — mitigation must be agreed before the Committee.',
+                default                                => 'Conclusion: the team, jobs and environmental & social risks are acceptable.',
+            },
+        ]);
+
+        /* 4 · Business & financials — the §3.3 transaction questions */
+        $business = implode("\n\n", array_filter([
+            $p?->customers || $p?->annual_revenue
+                ? 'Business: '.$join([$p->customers ? 'Customers: '.rtrim($p->customers, '.').'.' : '', $p->annual_revenue ? 'Annual revenue (past year): '.$m($p->annual_revenue).'.' : ''])
+                : '',
+            'Genuine transaction: '.$genuine,
+            'Investor commitment: '.$evidenced,
+            'Structure & amount: '.$structure,
+            'Use of the CAFI grant: '.$use,
+        ]));
+
+        /* 5 · Attachments & declaration — documents, declarations, remaining risks */
+        $missingDocs = $p ? collect($p->missingDocuments())->map(fn ($t) => EnterpriseDocument::missingLabel($t))->unique()->values()->all() : [];
+        $attachments = $join([
+            $p ? ($missingDocs ? 'Documents still missing: '.implode(', ', $missingDocs).'.' : 'All required documents are uploaded to the enterprise profile.') : '',
+            $p ? ($p->declaration_agreed ? 'The profile declaration was signed by '.($p->declared_name ?: 'the applicant').($p->declared_on ? ' on '.$p->declared_on->format('d M Y') : '').'.' : 'The profile declaration has not been signed.') : '',
+            $eoi->declaration_agree ? 'The EOI declaration was accepted'.($eoi->declaration_name ? ' by '.$eoi->declaration_name : '').'.' : 'The EOI declaration was not accepted.',
+            $risks,
+        ]);
+        if ($p && ($missingDocs || ! $p->declaration_agreed)) {
+            $attachments .= ' Documents and declarations must be completed before the Committee.';
+        }
+
+        return ['company' => $company, 'legal' => $legal, 'people' => $people, 'business' => $business, 'attachments' => $attachments];
     }
 
     /* ---------------- New assessment, pre-filled from the EOI / profile ---------------- */
@@ -400,30 +590,33 @@ class DueDiligence extends Model
     {
         $rate = (float) config('cif.usd_to_lsl', 18.00);
 
+        // Profile 8.2.8 engagement status (or the EOI answer) → Gate 2 transaction stage
         $stage = match ($p?->transaction_status ?? $eoi->investor_status) {
-            'discussion', 'discussions', 'interest' => 'interest',
-            'loi'                                   => 'loi',
-            'term_sheet'                            => 'term_sheet',
-            'agreement', 'committed'                => 'final_docs',
-            default                                 => null,
+            'initial', 'discussion', 'discussions', 'interest' => 'interest',
+            'indicative'                                       => 'indicative',
+            'loi', 'term_sheet_negotiation'                    => 'loi',
+            'term_sheet'                                       => 'term_sheet',
+            'agreement', 'committed'                           => 'final_docs',
+            'financial_close'                                  => 'financial_close',
+            default                                            => null,
         };
-        // Profile financing type → Gate 2 instrument
+        // Profile 8.3.1 instrument → Gate 2 instrument (debt is not eligible, so it is left for the officer)
         $instrument = match ($p?->participation) {
-            'equity'                                    => 'equity',
-            'convertible_note', 'safe', 'revenue_share' => 'quasi_equity',
-            'other'                                     => 'other',
-            default                                     => null,
+            'equity'                                                                => 'equity',
+            'quasi_equity', 'convertible', 'convertible_note', 'safe', 'revenue_share' => 'quasi_equity',
+            'other'                                                                 => 'other',
+            default                                                                 => null,
         };
 
         return [
             'areas'             => [],
-            'investor_names'    => (string) (collect($p?->investorRows() ?? [])->pluck('name')->implode(' · ') ?: ($p?->investor_name ?: $eoi->investor_name)),
+            'investor_names'    => (string) ($p?->lead_investor_name ?: (collect($p?->investorRows() ?? [])->pluck('name')->implode(' · ') ?: ($p?->investor_name ?: $eoi->investor_name))),
             'stage'             => $stage,
             'instrument'        => isset(self::INSTRUMENTS[$instrument ?? '']) ? $instrument : null,
             'private_amount'    => $p?->investorAmount() ?? ($eoi->investor_amount_usd !== null ? round((float) $eoi->investor_amount_usd * $rate) : null),
             'grant_amount'      => $p?->grant_requested !== null ? (float) $p->grant_requested : null,
             'esgc_category'     => null,
-            'summary'           => trim(($p?->registered_name ?: $eoi->business_name).($p?->sectorLabel() ? ' — '.$p->sectorLabel() : '').($p?->activity ? '. '.$p->activity : '')),
+            'summary'           => trim(($p?->registered_name ?: $eoi->business_name).($p?->sectorLabel() ? ' — '.$p->sectorLabel() : '').($p?->activity ? '. '.rtrim($p->activity, '.').'.' : '').($p?->tx_description ? ' Transaction: '.rtrim($p->tx_description, '.').'.' : '')),
             'expected_outcomes' => '',
             'key_risks'         => '',
             'memo'              => [],

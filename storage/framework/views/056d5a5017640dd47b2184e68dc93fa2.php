@@ -1,8 +1,11 @@
 <?php
 use App\Models\CommitteeReview;
+use App\Models\EnterpriseDocument;
 use App\Models\EnterpriseProfile;
 use App\Models\ExpressionOfInterest;
 use App\Models\GrantReadiness;
+use App\Notifications\EoiBankDetailsRequested;
+use App\Notifications\EoiBankDetailsSubmitted;
 use App\Notifications\EoiGrantReadinessUpdate;
 use App\Support\NotifyRecipients;
 use Illuminate\Support\Facades\DB;
@@ -85,17 +88,191 @@ use Livewire\WithFileUploads;
 
 
 <?php elseif($this->isApplicant): ?>
-    <section class="section-card">
-        <div class="section-card-head">
-            <span class="section-no">G4</span>
-            <h5 class="me-auto">Grant readiness</h5>
-            <span class="pill <?php echo e($g?->isApproved() ? 'pill-ok' : 'pill-warn'); ?>"><i class="bi <?php echo e($g?->isApproved() ? 'bi-check2-circle' : 'bi-hourglass-split'); ?>"></i> <?php echo e($g?->isApproved() ? 'Complete' : 'In progress'); ?></span>
-        </div>
-        <p class="small text-muted mb-0">
-            <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($g?->isApproved()): ?> Your grant file has been prepared and is with CAFI management for final authorisation.
-            <?php else: ?> The LEHSFF team is preparing your grant file: reviewing the grant budget and your bank account details, and drafting the Grant Agreement. They may contact you if anything is needed. <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
-        </p>
-    </section>
+    <?php
+        $ap      = $this->profile;
+        $apLetter = $ap?->document('bank_confirmation');
+        $apSent  = $g?->bank_submitted_at;
+    ?>
+    <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($this->canApplicantBank): ?>
+        
+        <section class="section-card" id="g4-bank">
+            <div class="section-card-head">
+                <span class="section-no"><i class="bi bi-bank"></i></span>
+                <div class="me-auto">
+                    <h5>Bank account for the grant</h5>
+                    <div class="small text-muted">The account your CAFI grant will be paid into. It must be held in your company's registered name<?php echo e($ap?->registered_name ? ' ('.$ap->registered_name.')' : ''); ?> — not a personal account.</div>
+                </div>
+                <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($apSent): ?>
+                    <span class="pill pill-ok"><i class="bi bi-check2-circle"></i> Sent <?php echo e($apSent->format('d M Y')); ?></span>
+                <?php else: ?>
+                    <span class="pill pill-warn"><i class="bi bi-hourglass-split"></i> Needed</span>
+                <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+            </div>
+
+            <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($apSent): ?>
+                <div class="callout callout-success small mb-3"><i class="bi bi-check2-circle me-1"></i>
+                    The LEHSFF team has your bank details and is checking them against your letter. You can still correct them below until the check is complete.</div>
+            <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+
+            <div class="row g-3">
+                <div class="col-md-4">
+                    <label class="form-label small fw-semibold mb-1" for="ab_bank">Bank <span class="req">*</span></label>
+                    <input type="text" id="ab_bank" maxlength="120" class="form-control <?php $__errorArgs = ['applicantBank.bank_name'];
+$__bag = $errors->getBag($__errorArgs[1] ?? 'default');
+if ($__bag->has($__errorArgs[0])) :
+if (isset($message)) { $__messageOriginal = $message; }
+$message = $__bag->first($__errorArgs[0]); ?> is-invalid <?php unset($message);
+if (isset($__messageOriginal)) { $message = $__messageOriginal; }
+endif;
+unset($__errorArgs, $__bag); ?>" wire:model.blur="applicantBank.bank_name" placeholder="e.g. Standard Lesotho Bank">
+                    <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php $__errorArgs = ['applicantBank.bank_name'];
+$__bag = $errors->getBag($__errorArgs[1] ?? 'default');
+if ($__bag->has($__errorArgs[0])) :
+if (isset($message)) { $__messageOriginal = $message; }
+$message = $__bag->first($__errorArgs[0]); ?> <div class="invalid-feedback"><?php echo e($message); ?></div> <?php unset($message);
+if (isset($__messageOriginal)) { $message = $__messageOriginal; }
+endif;
+unset($__errorArgs, $__bag); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label small fw-semibold mb-1" for="ab_branch">Branch</label>
+                    <input type="text" id="ab_branch" maxlength="120" class="form-control <?php $__errorArgs = ['applicantBank.bank_branch'];
+$__bag = $errors->getBag($__errorArgs[1] ?? 'default');
+if ($__bag->has($__errorArgs[0])) :
+if (isset($message)) { $__messageOriginal = $message; }
+$message = $__bag->first($__errorArgs[0]); ?> is-invalid <?php unset($message);
+if (isset($__messageOriginal)) { $message = $__messageOriginal; }
+endif;
+unset($__errorArgs, $__bag); ?>" wire:model.blur="applicantBank.bank_branch" placeholder="e.g. Kingsway, Maseru">
+                    <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php $__errorArgs = ['applicantBank.bank_branch'];
+$__bag = $errors->getBag($__errorArgs[1] ?? 'default');
+if ($__bag->has($__errorArgs[0])) :
+if (isset($message)) { $__messageOriginal = $message; }
+$message = $__bag->first($__errorArgs[0]); ?> <div class="invalid-feedback"><?php echo e($message); ?></div> <?php unset($message);
+if (isset($__messageOriginal)) { $message = $__messageOriginal; }
+endif;
+unset($__errorArgs, $__bag); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label small fw-semibold mb-1" for="ab_type">Account type</label>
+                    <select id="ab_type" class="form-select <?php $__errorArgs = ['applicantBank.bank_account_type'];
+$__bag = $errors->getBag($__errorArgs[1] ?? 'default');
+if ($__bag->has($__errorArgs[0])) :
+if (isset($message)) { $__messageOriginal = $message; }
+$message = $__bag->first($__errorArgs[0]); ?> is-invalid <?php unset($message);
+if (isset($__messageOriginal)) { $message = $__messageOriginal; }
+endif;
+unset($__errorArgs, $__bag); ?>" wire:model="applicantBank.bank_account_type">
+                        <option value="">Select…</option>
+                        <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::openLoop(); ?><?php endif; ?><?php $__currentLoopData = $G::ACCOUNT_TYPES; $__env->addLoop($__currentLoopData); foreach($__currentLoopData as $atk => $atl): $__env->incrementLoopIndices(); $loop = $__env->getLastLoop(); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::startLoopIteration(); ?><?php endif; ?> <option value="<?php echo e($atk); ?>"><?php echo e($atl); ?></option> <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::endLoop(); ?><?php endif; ?><?php endforeach; $__env->popLoop(); $loop = $__env->getLastLoop(); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::closeLoop(); ?><?php endif; ?>
+                    </select>
+                    <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php $__errorArgs = ['applicantBank.bank_account_type'];
+$__bag = $errors->getBag($__errorArgs[1] ?? 'default');
+if ($__bag->has($__errorArgs[0])) :
+if (isset($message)) { $__messageOriginal = $message; }
+$message = $__bag->first($__errorArgs[0]); ?> <div class="invalid-feedback"><?php echo e($message); ?></div> <?php unset($message);
+if (isset($__messageOriginal)) { $message = $__messageOriginal; }
+endif;
+unset($__errorArgs, $__bag); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label small fw-semibold mb-1" for="ab_aname">Account name <span class="req">*</span></label>
+                    <input type="text" id="ab_aname" maxlength="200" class="form-control <?php $__errorArgs = ['applicantBank.bank_account_name'];
+$__bag = $errors->getBag($__errorArgs[1] ?? 'default');
+if ($__bag->has($__errorArgs[0])) :
+if (isset($message)) { $__messageOriginal = $message; }
+$message = $__bag->first($__errorArgs[0]); ?> is-invalid <?php unset($message);
+if (isset($__messageOriginal)) { $message = $__messageOriginal; }
+endif;
+unset($__errorArgs, $__bag); ?>" wire:model.blur="applicantBank.bank_account_name">
+                    <div class="form-text">Exactly as it appears on the account.</div>
+                    <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php $__errorArgs = ['applicantBank.bank_account_name'];
+$__bag = $errors->getBag($__errorArgs[1] ?? 'default');
+if ($__bag->has($__errorArgs[0])) :
+if (isset($message)) { $__messageOriginal = $message; }
+$message = $__bag->first($__errorArgs[0]); ?> <div class="invalid-feedback"><?php echo e($message); ?></div> <?php unset($message);
+if (isset($__messageOriginal)) { $message = $__messageOriginal; }
+endif;
+unset($__errorArgs, $__bag); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label small fw-semibold mb-1" for="ab_anum">Account number <span class="req">*</span></label>
+                    <input type="text" id="ab_anum" maxlength="40" inputmode="numeric" class="form-control <?php $__errorArgs = ['applicantBank.bank_account_number'];
+$__bag = $errors->getBag($__errorArgs[1] ?? 'default');
+if ($__bag->has($__errorArgs[0])) :
+if (isset($message)) { $__messageOriginal = $message; }
+$message = $__bag->first($__errorArgs[0]); ?> is-invalid <?php unset($message);
+if (isset($__messageOriginal)) { $message = $__messageOriginal; }
+endif;
+unset($__errorArgs, $__bag); ?>" wire:model.blur="applicantBank.bank_account_number">
+                    <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php $__errorArgs = ['applicantBank.bank_account_number'];
+$__bag = $errors->getBag($__errorArgs[1] ?? 'default');
+if ($__bag->has($__errorArgs[0])) :
+if (isset($message)) { $__messageOriginal = $message; }
+$message = $__bag->first($__errorArgs[0]); ?> <div class="invalid-feedback"><?php echo e($message); ?></div> <?php unset($message);
+if (isset($__messageOriginal)) { $message = $__messageOriginal; }
+endif;
+unset($__errorArgs, $__bag); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+                </div>
+
+                <div class="col-12">
+                    <label class="form-label small fw-semibold mb-1">Bank confirmation letter <span class="req">*</span></label>
+                    <div class="form-text mt-0 mb-2">A letter from your bank, or a recent bank statement with the bank's stamp, showing the account name and number. PDF or a clear photo / scan, up to <?php echo e(\App\Models\EnterpriseDocument::MAX_KB / 1024); ?> MB.</div>
+                    <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($apLetter): ?>
+                        <div class="file-row mb-2">
+                            <span class="file-row-icon"><i class="bi bi-file-earmark-check"></i></span>
+                            <div class="flex-grow-1 small overflow-hidden">
+                                <a href="<?php echo e(route('enterprise-documents.download', $apLetter)); ?>" class="fw-semibold text-navy text-decoration-none text-truncate d-block"><?php echo e($apLetter->original_name); ?></a>
+                                <div class="text-muted"><?php echo e($apLetter->size_label); ?> · uploaded <?php echo e($apLetter->created_at?->format('d M Y')); ?></div>
+                            </div>
+                            <label class="btn btn-sm btn-outline-secondary mb-0">Replace <input type="file" class="d-none" wire:model="bankLetterFile" accept="<?php echo e(\App\Models\EnterpriseDocument::acceptFor('bank_confirmation')); ?>"></label>
+                            <button type="button" class="btn btn-icon btn-icon-danger" title="Remove" wire:click="removeBankLetter" wire:confirm="Remove the bank confirmation letter?"><i class="bi bi-trash"></i></button>
+                        </div>
+                    <?php else: ?>
+                        <input type="file" class="form-control <?php $__errorArgs = ['bankLetterFile'];
+$__bag = $errors->getBag($__errorArgs[1] ?? 'default');
+if ($__bag->has($__errorArgs[0])) :
+if (isset($message)) { $__messageOriginal = $message; }
+$message = $__bag->first($__errorArgs[0]); ?> is-invalid <?php unset($message);
+if (isset($__messageOriginal)) { $message = $__messageOriginal; }
+endif;
+unset($__errorArgs, $__bag); ?>" wire:model="bankLetterFile" accept="<?php echo e(\App\Models\EnterpriseDocument::acceptFor('bank_confirmation')); ?>">
+                    <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+                    <span wire:loading wire:target="bankLetterFile" class="small text-muted"><span class="spinner-border spinner-border-sm me-1"></span> Uploading…</span>
+                    <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php $__errorArgs = ['bankLetterFile'];
+$__bag = $errors->getBag($__errorArgs[1] ?? 'default');
+if ($__bag->has($__errorArgs[0])) :
+if (isset($message)) { $__messageOriginal = $message; }
+$message = $__bag->first($__errorArgs[0]); ?> <div class="text-danger small mt-1"><?php echo e($message); ?></div> <?php unset($message);
+if (isset($__messageOriginal)) { $message = $__messageOriginal; }
+endif;
+unset($__errorArgs, $__bag); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+                </div>
+            </div>
+
+            <div class="d-flex mt-4 pt-3 border-top">
+                <button type="button" class="btn btn-brand ms-auto" wire:click="submitBankDetails" wire:loading.attr="disabled" wire:target="submitBankDetails,bankLetterFile">
+                    <span wire:loading.remove wire:target="submitBankDetails"><i class="bi bi-send me-1"></i> <?php echo e($apSent ? 'Update bank details' : 'Submit bank details'); ?></span>
+                    <span wire:loading wire:target="submitBankDetails"><span class="spinner-border spinner-border-sm me-1"></span> Sending…</span>
+                </button>
+            </div>
+        </section>
+    <?php else: ?>
+        <section class="section-card">
+            <div class="section-card-head">
+                <span class="section-no">G4</span>
+                <h5 class="me-auto">Grant readiness</h5>
+                <span class="pill <?php echo e($g?->isApproved() ? 'pill-ok' : 'pill-warn'); ?>"><i class="bi <?php echo e($g?->isApproved() ? 'bi-check2-circle' : 'bi-hourglass-split'); ?>"></i> <?php echo e($g?->isApproved() ? 'Complete' : 'In progress'); ?></span>
+            </div>
+            <p class="small text-muted mb-0">
+                <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($g?->isApproved()): ?> Your grant file has been prepared and is with CAFI management for final authorisation.
+                <?php else: ?> The LEHSFF team is preparing your grant file: reviewing the grant budget and your bank account details, and drafting the Grant Agreement. They may contact you if anything is needed. <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+            </p>
+            <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($apSent): ?>
+                <div class="small text-success mt-2"><i class="bi bi-check2-circle me-1"></i> Your bank details were received on <?php echo e($apSent->format('d M Y')); ?>.</div>
+            <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+        </section>
+    <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
 
 
 <?php else: ?>
@@ -232,21 +409,23 @@ use Livewire\WithFileUploads;
         </div>
 
         
-        <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($btotals['grant'] > 0 || $btotals['private'] > 0): ?>
+        <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($btotals['grant'] > 0): ?>
             <details class="evidence mb-3">
-                <summary><i class="bi bi-pie-chart me-1"></i> Grant utilisation budget (enterprise profile) — CAFI grant <?php echo e($m($btotals['grant'])); ?> · investor <?php echo e($m($btotals['private'])); ?></summary>
+                <summary><i class="bi bi-pie-chart me-1"></i> Grant utilisation budget (enterprise profile) — CAFI grant <?php echo e($m($btotals['grant'])); ?></summary>
                 <div class="table-responsive">
                     <table class="table table-modern table-sm align-middle mb-0">
-                        <thead><tr><th>Category</th><th class="text-end">Investor (M)</th><th class="text-end">CAFI grant (M)</th></tr></thead>
+                        <thead><tr><th>Category</th><th class="text-end">CAFI grant (M)</th></tr></thead>
                         <tbody>
                             <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::openLoop(); ?><?php endif; ?><?php $__currentLoopData = $budget; $__env->addLoop($__currentLoopData); foreach($__currentLoopData as $row): $__env->incrementLoopIndices(); $loop = $__env->getLastLoop(); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::startLoopIteration(); ?><?php endif; ?>
-                                <?php if((float) ($row['private'] ?? 0) + (float) ($row['grant'] ?? 0) <= 0): ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?><?php continue; ?><?php endif; ?>
+                                <?php if((float) ($row['grant'] ?? 0) <= 0): ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?><?php continue; ?><?php endif; ?>
                                 <tr><td class="small"><?php echo e($row['category']); ?></td>
-                                    <td class="text-end small"><?php echo e(number_format((float) ($row['private'] ?? 0))); ?></td>
                                     <td class="text-end small"><?php echo e(number_format((float) ($row['grant'] ?? 0))); ?></td></tr>
+                                <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::openLoop(); ?><?php endif; ?><?php $__currentLoopData = $row['items'] ?? []; $__env->addLoop($__currentLoopData); foreach($__currentLoopData as $bit): $__env->incrementLoopIndices(); $loop = $__env->getLastLoop(); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::startLoopIteration(); ?><?php endif; ?>
+                                    <tr><td class="small text-muted ps-4">↳ <?php echo e($bit['name'] ?? ''); ?></td><td class="text-end small text-muted"><?php echo e(number_format((float) ($bit['grant'] ?? 0))); ?></td></tr>
+                                <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::endLoop(); ?><?php endif; ?><?php endforeach; $__env->popLoop(); $loop = $__env->getLastLoop(); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::closeLoop(); ?><?php endif; ?>
                             <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::endLoop(); ?><?php endif; ?><?php endforeach; $__env->popLoop(); $loop = $__env->getLastLoop(); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::closeLoop(); ?><?php endif; ?>
                         </tbody>
-                        <tfoot><tr class="fw-semibold"><td>Total</td><td class="text-end"><?php echo e(number_format($btotals['private'])); ?></td><td class="text-end"><?php echo e(number_format($btotals['grant'])); ?></td></tr></tfoot>
+                        <tfoot><tr class="fw-semibold"><td>Total</td><td class="text-end"><?php echo e(number_format($btotals['grant'])); ?></td></tr></tfoot>
                     </table>
                 </div>
                 <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($p?->document('budget')): ?>
@@ -280,7 +459,34 @@ use Livewire\WithFileUploads;
 
         
         <div class="g2-sub">
-            <div class="g2-sub-head"><i class="bi bi-bank me-1"></i> Bank account verification <span class="text-muted fw-normal">— entered by the enterprise in its profile; check it against the evidence</span></div>
+            <div class="g2-sub-head" id="g4-bank"><i class="bi bi-bank me-1"></i> Bank account verification <span class="text-muted fw-normal">— entered by the applicant at this step; check it against their bank confirmation letter</span></div>
+
+            
+            <?php
+                $bkAsked = $g?->bank_requested_at;
+                $bkSent  = $g?->bank_submitted_at;
+                $bkAsker = $g?->bank_requested_by ? \App\Models\User::find($g->bank_requested_by)?->name : null;
+            ?>
+            <div class="d-flex flex-wrap align-items-center gap-2 border rounded-3 p-2 mb-3 <?php echo e($bkSent ? 'bg-success-subtle' : 'bg-light'); ?>">
+                <i class="bi <?php echo e($bkSent ? 'bi-check2-circle text-success' : ($bkAsked ? 'bi-envelope-check text-primary' : 'bi-envelope')); ?> fs-5 ms-1"></i>
+                <div class="small me-auto">
+                    <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($bkSent): ?>
+                        <strong>Received from the applicant</strong> on <?php echo e($bkSent->format('d M Y H:i')); ?>.
+                        <span class="text-muted">They can still correct them until you submit to the Hub Manager.</span>
+                    <?php elseif($bkAsked): ?>
+                        <strong>Requested</strong> <?php echo e($bkAsked->diffForHumans()); ?><?php echo e($bkAsker ? ' by '.$bkAsker : ''); ?> — waiting for the applicant.
+                    <?php else: ?>
+                        The applicant enters the bank details and uploads the letter themselves. Send them a link by e-mail.
+                    <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+                </div>
+                <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($canG): ?>
+                    <button type="button" class="btn btn-sm <?php echo e($bkAsked ? 'btn-outline-secondary' : 'btn-brand'); ?>" wire:click="requestBankDetails" wire:loading.attr="disabled" wire:target="requestBankDetails"
+                            wire:confirm="<?php echo e($bkAsked ? 'Send the applicant a reminder by e-mail?' : 'E-mail the applicant a link to enter their bank details and upload a bank confirmation letter?'); ?>">
+                        <span wire:loading.remove wire:target="requestBankDetails"><i class="bi bi-envelope-arrow-up me-1"></i><?php echo e($bkAsked ? 'Send reminder' : 'Request bank details'); ?></span>
+                        <span wire:loading wire:target="requestBankDetails"><span class="spinner-border spinner-border-sm me-1"></span> Sending…</span>
+                    </button>
+                <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+            </div>
             <?php
                 $bk        = $form['bank'] ?? [];
                 $bkFilled  = filled($bk['bank'] ?? null) && filled($bk['account_name'] ?? null) && filled($bk['account_number'] ?? null);
@@ -301,19 +507,19 @@ use Livewire\WithFileUploads;
                 </div>
             <?php else: ?>
                 <div class="callout callout-warning small mb-2"><i class="bi bi-exclamation-triangle me-1"></i>
-                    The enterprise has not entered its bank details yet. Ask them to complete <strong>Business → Bank account for the grant</strong> in their profile.</div>
+                    The applicant has not entered their bank details yet.<?php echo e($bkAsked ? '' : ' Use Request bank details above to e-mail them the link.'); ?></div>
             <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
 
             <div class="row g-2">
                 <div class="col-md-6">
-                    <label class="form-label small fw-semibold mb-1">Evidence from the enterprise</label>
+                    <label class="form-label small fw-semibold mb-1">Evidence from the applicant</label>
                     <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($bankDoc): ?>
                         <div class="small"><a href="<?php echo e(route('enterprise-documents.download', $bankDoc)); ?>" class="text-decoration-none"><i class="bi bi-paperclip"></i> <?php echo e(\Illuminate\Support\Str::limit($bankDoc->original_name, 45)); ?></a>
                             <span class="text-muted">· bank confirmation letter</span></div>
                     <?php else: ?>
-                        <div class="small text-muted">No bank confirmation letter uploaded in the profile.</div>
+                        <div class="small text-muted">No bank confirmation letter uploaded yet.</div>
                     <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
-                    <label class="form-label small fw-semibold mb-1 mt-2">Other verification document <span class="text-muted fw-normal">(optional<?php echo e($bankDoc ? '' : ' — needed if the enterprise has not uploaded a letter'); ?>)</span></label>
+                    <label class="form-label small fw-semibold mb-1 mt-2">Other verification document <span class="text-muted fw-normal">(optional<?php echo e($bankDoc ? '' : ' — needed if the applicant has not uploaded a letter'); ?>)</span></label>
                     <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($g?->bank_evidence_path): ?>
                         <div class="d-flex align-items-center gap-2 small">
                             <a href="<?php echo e(route('grant-readiness.file', [$g, 'bank_evidence'])); ?>" class="text-decoration-none text-truncate"><i class="bi bi-paperclip"></i> <?php echo e($g->bank_evidence_name); ?></a>
@@ -362,7 +568,7 @@ $message = $__bag->first($__errorArgs[0]); ?> <div class="text-danger small"><?p
 if (isset($__messageOriginal)) { $message = $__messageOriginal; }
 endif;
 unset($__errorArgs, $__bag); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
-                    <div class="form-text">Then record the result in the <strong>Bank account</strong> check above: Confirmed if the details match the evidence, or Action required if the enterprise must correct its profile.</div>
+                    <div class="form-text">Then record the result in the <strong>Bank account</strong> check above: Confirmed if the details match the evidence, or Action required if the applicant must correct them (they can, until you submit).</div>
                 </div>
             </div>
         </div>
@@ -557,6 +763,72 @@ unset($__errorArgs, $__bag); ?>" wire:model.blur="form.gm_on" max="<?php echo e(
                     <div>Opens once <?php echo e($who === 'hub' ? 'Grants Management has submitted the file' : 'the Hub Manager has approved the file for submission'); ?>. The reviews are sequential.</div>
                 </div>
             <?php else: ?>
+                
+                <?php
+                    $defs     = $who === 'hub' ? $G::HUB_CHECKS : $G::DIRECTOR_CHECKS;
+                    $ticked   = collect($defs)->filter(fn ($d, $k) => $val['checks'][$k]['done'] ?? false)->count();
+                    $ddMemo   = $this->dd;
+                    $docLink  = fn (?string $doc) => match ($doc) {
+                        'iam'       => $ddMemo ? [route('due-diligence.memorandum', $ddMemo), 'Open memorandum', 'bi-file-earmark-pdf'] : null,
+                        'memo'      => $g ? [route('grant-readiness.memo', $g), 'Open memo', 'bi-file-earmark-pdf'] : null,
+                        'agreement' => $g?->agreement_path ? [route('grant-readiness.file', [$g, 'agreement']), 'Open draft agreement', 'bi-file-earmark-text'] : null,
+                        default     => null,
+                    };
+                ?>
+                <div class="g2-sub mb-3">
+                    <div class="g2-sub-head d-flex align-items-center">
+                        <span class="me-auto"><i class="bi bi-list-check me-1"></i> Review checklist</span>
+                        <span class="pill <?php echo e($ticked === count($defs) ? 'pill-ok' : 'pill-warn'); ?>"><?php echo e($ticked); ?> / <?php echo e(count($defs)); ?> done</span>
+                    </div>
+                    <div class="small text-muted mb-2">Open each document, review it, then tick it. Every item must be ticked before you can approve.</div>
+                    <div class="d-flex flex-column gap-2">
+                        <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::openLoop(); ?><?php endif; ?><?php $__currentLoopData = $defs; $__env->addLoop($__currentLoopData); foreach($__currentLoopData as $ck => [$cLabel, $cHint, $cDoc]): $__env->incrementLoopIndices(); $loop = $__env->getLastLoop(); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::startLoopIteration(); ?><?php endif; ?>
+                            <?php $row = $val['checks'][$ck] ?? ['done' => false, 'note' => '', 'at' => null]; $link = $docLink($cDoc); ?>
+                            <div class="border rounded-3 p-2 <?php echo e($row['done'] ? 'border-success' : ''); ?> <?php $__errorArgs = ["$who.checks.$ck"];
+$__bag = $errors->getBag($__errorArgs[1] ?? 'default');
+if ($__bag->has($__errorArgs[0])) :
+if (isset($message)) { $__messageOriginal = $message; }
+$message = $__bag->first($__errorArgs[0]); ?> border-danger <?php unset($message);
+if (isset($__messageOriginal)) { $message = $__messageOriginal; }
+endif;
+unset($__errorArgs, $__bag); ?>" <?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::$currentLoop['key'] = ''.e($who).'-chk-'.e($ck).''; ?>wire:key="<?php echo e($who); ?>-chk-<?php echo e($ck); ?>">
+                                <div class="d-flex flex-wrap align-items-start gap-2">
+                                    <div class="form-check mb-0 flex-grow-1">
+                                        <input type="checkbox" class="form-check-input" id="<?php echo e($who); ?>-chk-<?php echo e($ck); ?>" wire:model.live="<?php echo e($who); ?>.checks.<?php echo e($ck); ?>.done" <?php if(! $can): echo 'disabled'; endif; ?>>
+                                        <label class="form-check-label" for="<?php echo e($who); ?>-chk-<?php echo e($ck); ?>">
+                                            <span class="fw-semibold text-navy small"><?php echo e($cLabel); ?></span>
+                                            <span class="d-block small text-muted"><?php echo e($cHint); ?></span>
+                                            <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($row['done'] && $row['at']): ?>
+                                                <span class="d-block small text-success"><i class="bi bi-check2"></i> Ticked <?php echo e(\Illuminate\Support\Carbon::parse($row['at'])->format('d M Y H:i')); ?></span>
+                                            <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+                                        </label>
+                                    </div>
+                                    <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($cDoc): ?>
+                                        <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($link): ?>
+                                            <a href="<?php echo e($link[0]); ?>" target="_blank" class="btn btn-sm btn-outline-secondary"><i class="bi <?php echo e($link[2]); ?> me-1"></i> <?php echo e($link[1]); ?></a>
+                                        <?php else: ?>
+                                            <span class="pill pill-warn"><i class="bi bi-exclamation-triangle"></i> Not available</span>
+                                        <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+                                    <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+                                </div>
+                                <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($can): ?>
+                                    <input type="text" class="form-control form-control-sm mt-2" wire:model.blur="<?php echo e($who); ?>.checks.<?php echo e($ck); ?>.note" placeholder="Note (optional)">
+                                <?php elseif(filled($row['note'])): ?>
+                                    <div class="small text-muted mt-1 fst-italic">“<?php echo e($row['note']); ?>”</div>
+                                <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+                                <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php $__errorArgs = ["$who.checks.$ck"];
+$__bag = $errors->getBag($__errorArgs[1] ?? 'default');
+if ($__bag->has($__errorArgs[0])) :
+if (isset($message)) { $__messageOriginal = $message; }
+$message = $__bag->first($__errorArgs[0]); ?> <div class="text-danger small mt-1"><?php echo e($message); ?></div> <?php unset($message);
+if (isset($__messageOriginal)) { $message = $__messageOriginal; }
+endif;
+unset($__errorArgs, $__bag); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+                            </div>
+                        <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::endLoop(); ?><?php endif; ?><?php endforeach; $__env->popLoop(); $loop = $__env->getLastLoop(); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::closeLoop(); ?><?php endif; ?>
+                    </div>
+                </div>
+
                 <div class="choice-group cols-2 <?php $__errorArgs = ["$who.decision"];
 $__bag = $errors->getBag($__errorArgs[1] ?? 'default');
 if ($__bag->has($__errorArgs[0])) :

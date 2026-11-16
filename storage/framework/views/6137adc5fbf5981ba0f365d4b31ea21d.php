@@ -1,5 +1,6 @@
 <?php
 use App\Models\Authorisation;
+use App\Models\AuthorisationDocument;
 use App\Models\CommitteeReview;
 use App\Models\DueDiligence;
 use App\Models\EnterpriseProfile;
@@ -43,6 +44,9 @@ use Livewire\WithFileUploads;
     $instrument = $a?->instrument ?? $this->dd?->instrument;
     $mdDone     = $a?->md_decided_at !== null;
     $psDone     = $a?->ps_decided_at !== null;
+    $mdSent     = (bool) $a?->sentForSigning('md');
+    $mdDocs     = $this->mdDocs;
+    $psDocs     = $this->psDocs;
     $openConds  = collect($conditions)->where('status', 'open')->count();
 
     // Path: done | current | failed | returned | todo
@@ -61,7 +65,7 @@ use Livewire\WithFileUploads;
     };
     $path = [
         ['Gate 4 · Grant readiness', $this->readiness ? 'done' : ($this->readinessOk ? 'done' : 'current')],
-        ['Managing Director signature', $mdState],
+        ['Managing Director review', $mdState],
         ['Principal Secretary signature', $psState],
         ['Gate 6 · Conditions precedent & onboarding', $outcome === 'authorised' ? 'current' : 'todo'],
     ];
@@ -71,7 +75,7 @@ use Livewire\WithFileUploads;
         $decided            => [$A::OUTCOMES[$outcome][0], $A::OUTCOMES[$outcome][4], $A::OUTCOMES[$outcome][3]],
         ! $this->readinessOk => ['Waiting for Gate 4', 'pill-muted', 'bi-lock'],
         $stage === 'ps'     => ['Awaiting Principal Secretary signature', 'pill-warn', 'bi-hourglass-split'],
-        default             => ['Awaiting Managing Director signature', 'pill-warn', 'bi-hourglass-split'],
+        default             => [$mdSent ? 'With the Managing Director for review' : 'Send to the Managing Director', 'pill-warn', 'bi-hourglass-split'],
     };
 ?>
 
@@ -84,7 +88,7 @@ use Livewire\WithFileUploads;
             <span class="pill pill-muted"><i class="bi bi-lock-fill"></i> Locked</span>
         </div>
         <p class="small text-muted mb-0">Opens once Gate 4 · Grant readiness is approved by the PMU Director of Implementation.
-            The Grant Agreement is then signed by the CAFI Managing Director and, after that, by the MTIBD Principal Secretary — both signatures constitute formal approval of the grant.</p>
+            The documents are then reviewed by the CAFI Managing Director and, once the Managing Director is satisfied, signed by the MTIBD Principal Secretary — the Principal Secretary's signature constitutes formal approval of the grant.</p>
     </section>
 
 
@@ -96,8 +100,8 @@ use Livewire\WithFileUploads;
             <span class="pill <?php echo e($decided ? $A::OUTCOMES[$outcome][4] : 'pill-warn'); ?>"><i class="bi <?php echo e($decided ? $A::OUTCOMES[$outcome][3] : 'bi-hourglass-split'); ?>"></i> <?php echo e($decided ? $A::OUTCOMES[$outcome][0] : 'In progress'); ?></span>
         </div>
         <p class="small text-muted mb-0">
-            <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if(! $decided): ?> Your Grant Agreement is with CAFI management for signature.
-            <?php elseif($outcome === 'authorised'): ?> Your grant has been formally approved — the Grant Agreement has been signed by the CAFI Managing Director and the MTIBD Principal Secretary. The next step is meeting the conditions precedent and onboarding. Approval does not itself trigger payment.
+            <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if(! $decided): ?> Your Grant Agreement is with CAFI management for review and signature.
+            <?php elseif($outcome === 'authorised'): ?> Your grant has been formally approved — the Grant Agreement has been reviewed by the CAFI Managing Director and signed by the MTIBD Principal Secretary. The next step is meeting the conditions precedent and onboarding. Approval does not itself trigger payment.
             <?php elseif($outcome === 'clarification'): ?> Further information is being prepared before authorisation can be completed. The LEHSFF team will contact you if anything is needed from you.
             <?php else: ?> Your grant was not approved and will not proceed further.
             <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
@@ -131,7 +135,7 @@ use Livewire\WithFileUploads;
             <span class="section-no">G5</span>
             <div class="me-auto">
                 <h5>Final authorisation <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($round > 1): ?> <span class="pill pill-muted ms-1">Round <?php echo e($round); ?></span> <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?></h5>
-                <div class="small text-muted">Formal approval of the grant through the sequential signing of the Grant Agreement by the CAFI Managing Director and the MTIBD Principal Secretary.</div>
+                <div class="small text-muted">Review of the documents by the CAFI Managing Director, then signature of the Grant Agreement by the MTIBD Principal Secretary (formal approval).</div>
             </div>
             <span class="pill <?php echo e($headPill[1]); ?>"><i class="bi <?php echo e($headPill[2]); ?>"></i> <?php echo e($headPill[0]); ?></span>
         </div>
@@ -142,7 +146,7 @@ use Livewire\WithFileUploads;
                 <span wire:loading class="ms-1"><span class="spinner-border spinner-border-sm"></span></span>
             </div>
         <?php elseif(! $decided && $eoi->status === 'authorisation' && ! auth()->user()->canAny(['gate4.md', 'gate4.ps', 'gate2.assess'])): ?>
-            <div class="small text-muted mb-3"><i class="bi bi-eye me-1"></i> Read-only — the PMU sends the Grant Agreement for signing and records the signed decisions.</div>
+            <div class="small text-muted mb-3"><i class="bi bi-eye me-1"></i> Read-only — the PMU sends the documents for review and signature and records the outcome.</div>
         <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
 
         <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if(! $this->readinessOk && ! $decided): ?>
@@ -154,10 +158,11 @@ use Livewire\WithFileUploads;
 
         <div class="callout small mb-3">
             <i class="bi bi-envelope-paper me-1"></i>
-            The Managing Director and the Principal Secretary sign the Grant Agreement outside the system: for each of them, <strong>1</strong> send them the agreement yourself
-            (the Gate 4 Draft Grant Agreement is used for the MD, and the MD-signed copy for the PS, unless you attach another file), <strong>2</strong> upload the signed copy when it comes back,
-            <strong>3</strong> record the decision written on it. The Principal Secretary's step opens once the Managing Director has signed.
-            Recording a decision e-mails the PMU (and, on a final outcome, the applicant, the Committee and Finance).
+            Both steps happen outside the system — nobody needs to log in.
+            <strong>1</strong> Send the documents to the <strong>CAFI Managing Director</strong> for review yourself (attach as many as needed) and record the outcome of the review.
+            <strong>2</strong> When the Managing Director is satisfied, forward the documents to the <strong>MTIBD Principal Secretary</strong> by e-mail for signature,
+            then upload the signed documents here to complete the authorisation.
+            Recording an outcome e-mails the PMU (and, on a final outcome, the applicant, the Committee and Finance).
         </div>
 
         <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($a?->resubmission_note): ?>
@@ -187,7 +192,7 @@ use Livewire\WithFileUploads;
             <div><dt>Approved CAFI grant</dt><dd><?php echo e($m($grant)); ?> <div class="small text-muted"><?php echo e($u($grant)); ?></div></dd></div>
             <div><dt>Instrument</dt><dd><?php echo e($DD::INSTRUMENTS[$instrument ?? ''] ?? '—'); ?></dd></div>
             <div><dt>Outstanding actions</dt><dd><?php echo e($openConds ? $openConds.' open '.\Illuminate\Support\Str::plural('condition', $openConds) : 'None'); ?> <a href="#g4-conditions" class="small ms-1">See conditions</a></dd></div>
-            <div><dt>Authorised next stage</dt><dd class="<?php echo e($outcome ? '' : 'text-faint'); ?>"><?php echo e($a?->nextStage() ?? 'Managing Director signature'); ?></dd></div>
+            <div><dt>Authorised next stage</dt><dd class="<?php echo e($outcome ? '' : 'text-faint'); ?>"><?php echo e($a?->nextStage() ?? 'Managing Director review'); ?></dd></div>
         </div>
 
         <div class="callout small mt-3 mb-0">
@@ -207,7 +212,7 @@ use Livewire\WithFileUploads;
             <span class="section-no"><i class="bi bi-folder2-open"></i></span>
             <div class="me-auto">
                 <h5>Transaction file</h5>
-                <div class="small text-muted">What the signing authorities receive: the Grant Readiness Memo, the Draft Grant Agreement, the Committee recommendation and supporting documents.</div>
+                <div class="small text-muted">What you can send to the Managing Director: the Grant Readiness Memo, the Draft Grant Agreement, the Committee recommendation and supporting documents.</div>
             </div>
             <span class="pill <?php echo e($included === count($file) ? 'pill-ok' : 'pill-warn'); ?>"><?php echo e($included); ?> / <?php echo e(count($file)); ?> included</span>
         </div>
@@ -239,30 +244,194 @@ use Livewire\WithFileUploads;
         <div class="section-card-head">
             <span class="section-no">1</span>
             <div class="me-auto">
-                <h5>CAFI Managing Director review and signature</h5>
+                <h5>CAFI Managing Director review</h5>
                 <div class="small text-muted">
-                    <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($mdDone): ?> Signed by <?php echo e($a->signerName('md')); ?> on <?php echo e($a->md_on?->format('d M Y')); ?> · recorded by <?php echo e($a->managingDirector?->name ?? '—'); ?> on <?php echo e($a->md_decided_at->format('d M Y H:i')); ?>.
-                    <?php else: ?> Send the Grant Agreement for signing, upload the signed copy, then record what the Managing Director decided. <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+                    <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($mdDone): ?> Reviewed by <?php echo e($a->signerName('md')); ?> on <?php echo e($a->md_on?->format('d M Y')); ?> · recorded by <?php echo e($a->managingDirector?->name ?? '—'); ?> on <?php echo e($a->md_decided_at->format('d M Y H:i')); ?>.
+                    <?php else: ?> Send the documents to the Managing Director for review, then record the outcome. The Managing Director reviews only — the Principal Secretary signs. <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
                 </div>
             </div>
             <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($mdDone): ?>
                 <?php [$mdL, , $mdI] = $A::MD_DECISIONS[$a->md_decision]; ?>
                 <span class="pill <?php echo e(['approve' => 'pill-ok', 'return' => 'pill-warn', 'decline' => 'pill-danger'][$a->md_decision]); ?>"><i class="bi <?php echo e($mdI); ?>"></i> <?php echo e($mdL); ?></span>
-            <?php else: ?>
+            <?php elseif($mdSent): ?>
                 <span class="pill pill-warn"><i class="bi bi-hourglass-split"></i> In review</span>
+            <?php else: ?>
+                <span class="pill pill-muted"><i class="bi bi-envelope"></i> Not sent</span>
             <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
         </div>
 
-        <?php echo $__env->make('expression-of-interest.authorisation.partials.signing', ['role' => 'md', 'a' => $a, 'can' => $canMd, 'signing' => $signing, 'decidedRole' => $mdDone, 'defaultDoc' => $canMd ? $this->defaultDocument('md', $a) : null], array_diff_key(get_defined_vars(), ['__data' => 1, '__path' => 1]))->render(); ?>
+        
+        <div class="border rounded-3 p-3 mb-3 bg-light">
+            <div class="d-flex align-items-center gap-2 mb-2">
+                <span class="pill <?php echo e($mdSent ? 'pill-ok' : 'pill-warn'); ?>"><i class="bi <?php echo e($mdSent ? 'bi-envelope-check' : 'bi-envelope'); ?>"></i> 1</span>
+                <span class="fw-semibold text-navy small">Send the documents to the Managing Director for review</span>
+            </div>
 
-        <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($canMd && ! $a?->hasSignedCopy('md')): ?>
-            <div class="small text-muted mb-2"><i class="bi bi-info-circle me-1"></i> You can fill in step 3 while waiting; the decision can only be recorded once the signed copy is uploaded.</div>
-        <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+            <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($mdSent): ?>
+                <div class="small mb-2">
+                    Sent to <strong><?php echo e($a->md_signer_name); ?></strong> (<?php echo e($a->md_signer_email); ?>) on <?php echo e($a->md_sent_at->format('d M Y')); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($a->mdSender): ?> by <?php echo e($a->mdSender->name); ?><?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>.
+                    <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($a->md_request_message): ?> <div class="text-muted mt-1"><i class="bi bi-chat-left-text me-1"></i><?php echo e($a->md_request_message); ?></div> <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+                </div>
+            <?php elseif(! $canMd): ?>
+                <div class="small text-muted mb-2">Not sent yet.</div>
+            <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
 
-        <div class="d-flex align-items-center gap-2 mb-2">
-            <span class="pill <?php echo e($mdDone ? 'pill-ok' : 'pill-warn'); ?>">3</span>
-            <span class="fw-semibold text-navy small">Record the Managing Director's decision, as written on the signed document</span>
+            <?php echo $__env->make('expression-of-interest.authorisation.partials.documents', ['docs' => $mdDocs, 'canRemove' => $canMd, 'empty' => $canMd ? null : 'No documents.'], array_diff_key(get_defined_vars(), ['__data' => 1, '__path' => 1]))->render(); ?>
+
+            <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($canMd): ?>
+                <?php $mdDefault = $mdDocs->isEmpty() ? $this->defaultDocument('md') : null; ?>
+                <div class="row g-2 mt-1">
+                    <div class="col-md-6">
+                        <label class="form-label small fw-semibold mb-1">Managing Director's name <span class="req">*</span></label>
+                        <input type="text" class="form-control form-control-sm <?php $__errorArgs = ['signing.md.name'];
+$__bag = $errors->getBag($__errorArgs[1] ?? 'default');
+if ($__bag->has($__errorArgs[0])) :
+if (isset($message)) { $__messageOriginal = $message; }
+$message = $__bag->first($__errorArgs[0]); ?> is-invalid <?php unset($message);
+if (isset($__messageOriginal)) { $message = $__messageOriginal; }
+endif;
+unset($__errorArgs, $__bag); ?>" wire:model="signing.md.name" placeholder="<?php echo e($A::AUTHORITIES['md'][0]); ?>">
+                        <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php $__errorArgs = ['signing.md.name'];
+$__bag = $errors->getBag($__errorArgs[1] ?? 'default');
+if ($__bag->has($__errorArgs[0])) :
+if (isset($message)) { $__messageOriginal = $message; }
+$message = $__bag->first($__errorArgs[0]); ?> <div class="invalid-feedback"><?php echo e($message); ?></div> <?php unset($message);
+if (isset($__messageOriginal)) { $message = $__messageOriginal; }
+endif;
+unset($__errorArgs, $__bag); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label small fw-semibold mb-1">E-mail <span class="req">*</span></label>
+                        <input type="email" class="form-control form-control-sm <?php $__errorArgs = ['signing.md.email'];
+$__bag = $errors->getBag($__errorArgs[1] ?? 'default');
+if ($__bag->has($__errorArgs[0])) :
+if (isset($message)) { $__messageOriginal = $message; }
+$message = $__bag->first($__errorArgs[0]); ?> is-invalid <?php unset($message);
+if (isset($__messageOriginal)) { $message = $__messageOriginal; }
+endif;
+unset($__errorArgs, $__bag); ?>" wire:model="signing.md.email">
+                        <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php $__errorArgs = ['signing.md.email'];
+$__bag = $errors->getBag($__errorArgs[1] ?? 'default');
+if ($__bag->has($__errorArgs[0])) :
+if (isset($message)) { $__messageOriginal = $message; }
+$message = $__bag->first($__errorArgs[0]); ?> <div class="invalid-feedback"><?php echo e($message); ?></div> <?php unset($message);
+if (isset($__messageOriginal)) { $message = $__messageOriginal; }
+endif;
+unset($__errorArgs, $__bag); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label small fw-semibold mb-1">
+                            <?php echo e($mdDocs->isEmpty() ? 'Documents for review' : 'Add more documents'); ?>
+
+                            <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($mdDocs->isEmpty() && ! $mdDefault): ?> <span class="req">*</span> <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+                        </label>
+
+                        
+                        <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if(count($mdFiles)): ?>
+                            <div class="mb-2">
+                                <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::openLoop(); ?><?php endif; ?><?php $__currentLoopData = $mdFiles; $__env->addLoop($__currentLoopData); foreach($__currentLoopData as $i => $f): $__env->incrementLoopIndices(); $loop = $__env->getLastLoop(); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::startLoopIteration(); ?><?php endif; ?>
+                                    <div class="file-row" <?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::$currentLoop['key'] = 'md-picked-'.e($i).'-'.e($f->getFilename()).''; ?>wire:key="md-picked-<?php echo e($i); ?>-<?php echo e($f->getFilename()); ?>">
+                                        <span class="file-row-icon"><i class="bi bi-file-earmark-plus"></i></span>
+                                        <div class="flex-grow-1 small overflow-hidden">
+                                            <div class="fw-semibold text-navy text-truncate"><?php echo e($f->getClientOriginalName()); ?></div>
+                                            <div class="text-muted"><?php echo e(number_format(max(1, $f->getSize() / 1024))); ?> KB · not saved yet</div>
+                                        </div>
+                                        <button type="button" class="btn btn-icon btn-icon-danger" title="Remove" wire:click="removePicked(<?php echo e($i); ?>)"><i class="bi bi-x-lg"></i></button>
+                                    </div>
+                                <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::endLoop(); ?><?php endif; ?><?php endforeach; $__env->popLoop(); $loop = $__env->getLastLoop(); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::closeLoop(); ?><?php endif; ?>
+                            </div>
+                        <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+
+                        <div <?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::$currentLoop['key'] = 'md-pick-'.e($pickKey).''; ?>wire:key="md-pick-<?php echo e($pickKey); ?>">
+                            <input type="file" multiple class="form-control form-control-sm <?php $__errorArgs = ['mdPick'];
+$__bag = $errors->getBag($__errorArgs[1] ?? 'default');
+if ($__bag->has($__errorArgs[0])) :
+if (isset($message)) { $__messageOriginal = $message; }
+$message = $__bag->first($__errorArgs[0]); ?> is-invalid <?php unset($message);
+if (isset($__messageOriginal)) { $message = $__messageOriginal; }
+endif;
+unset($__errorArgs, $__bag); ?> <?php $__errorArgs = ['mdPick.*'];
+$__bag = $errors->getBag($__errorArgs[1] ?? 'default');
+if ($__bag->has($__errorArgs[0])) :
+if (isset($message)) { $__messageOriginal = $message; }
+$message = $__bag->first($__errorArgs[0]); ?> is-invalid <?php unset($message);
+if (isset($__messageOriginal)) { $message = $__messageOriginal; }
+endif;
+unset($__errorArgs, $__bag); ?> <?php $__errorArgs = ['mdFiles'];
+$__bag = $errors->getBag($__errorArgs[1] ?? 'default');
+if ($__bag->has($__errorArgs[0])) :
+if (isset($message)) { $__messageOriginal = $message; }
+$message = $__bag->first($__errorArgs[0]); ?> is-invalid <?php unset($message);
+if (isset($__messageOriginal)) { $message = $__messageOriginal; }
+endif;
+unset($__errorArgs, $__bag); ?>"
+                                   wire:model="mdPick" accept=".pdf,.doc,.docx,.xls,.xlsx,.pptx,.jpg,.jpeg,.png">
+                        </div>
+                        <div class="form-text">
+                            <span wire:loading wire:target="mdPick"><span class="spinner-border spinner-border-sm me-1"></span> Uploading…</span>
+                            <span wire:loading.remove wire:target="mdPick">
+                                <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if(count($mdFiles)): ?> <?php echo e(count($mdFiles)); ?> <?php echo e(\Illuminate\Support\Str::plural('document', count($mdFiles))); ?> ready — choose another file to add it, or save.
+                                <?php elseif($mdDocs->isEmpty() && $mdDefault): ?> Choose files one at a time (or several at once). Leave empty to send <strong><?php echo e($mdDefault[2]); ?></strong> (the Draft Grant Agreement from Gate 4).
+                                <?php else: ?> Choose files one at a time (or several at once) — each is added to the list. PDF, Word, Excel, PowerPoint or images, up to <?php echo e($A::MAX_KB / 1024); ?> MB each. <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+                            </span>
+                        </div>
+                        <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php $__errorArgs = ['mdPick'];
+$__bag = $errors->getBag($__errorArgs[1] ?? 'default');
+if ($__bag->has($__errorArgs[0])) :
+if (isset($message)) { $__messageOriginal = $message; }
+$message = $__bag->first($__errorArgs[0]); ?> <div class="invalid-feedback d-block"><?php echo e($message); ?></div> <?php unset($message);
+if (isset($__messageOriginal)) { $message = $__messageOriginal; }
+endif;
+unset($__errorArgs, $__bag); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+                        <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php $__errorArgs = ['mdPick.*'];
+$__bag = $errors->getBag($__errorArgs[1] ?? 'default');
+if ($__bag->has($__errorArgs[0])) :
+if (isset($message)) { $__messageOriginal = $message; }
+$message = $__bag->first($__errorArgs[0]); ?> <div class="invalid-feedback d-block"><?php echo e($message); ?></div> <?php unset($message);
+if (isset($__messageOriginal)) { $message = $__messageOriginal; }
+endif;
+unset($__errorArgs, $__bag); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+                        <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php $__errorArgs = ['mdFiles'];
+$__bag = $errors->getBag($__errorArgs[1] ?? 'default');
+if ($__bag->has($__errorArgs[0])) :
+if (isset($message)) { $__messageOriginal = $message; }
+$message = $__bag->first($__errorArgs[0]); ?> <div class="invalid-feedback d-block"><?php echo e($message); ?></div> <?php unset($message);
+if (isset($__messageOriginal)) { $message = $__messageOriginal; }
+endif;
+unset($__errorArgs, $__bag); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+                        <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php $__errorArgs = ['mdFiles.*'];
+$__bag = $errors->getBag($__errorArgs[1] ?? 'default');
+if ($__bag->has($__errorArgs[0])) :
+if (isset($message)) { $__messageOriginal = $message; }
+$message = $__bag->first($__errorArgs[0]); ?> <div class="invalid-feedback d-block"><?php echo e($message); ?></div> <?php unset($message);
+if (isset($__messageOriginal)) { $message = $__messageOriginal; }
+endif;
+unset($__errorArgs, $__bag); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label small fw-semibold mb-1">Note (optional)</label>
+                        <textarea rows="2" class="form-control form-control-sm" wire:model="signing.md.message" placeholder="e.g. e-mailed with the Grant Readiness Memo, follow up on Friday"></textarea>
+                    </div>
+                    <div class="col-12 d-flex">
+                        <button type="button" class="btn btn-sm <?php echo e($mdSent ? 'btn-outline-secondary' : 'btn-brand'); ?> ms-auto" wire:click="sendToMd"
+                                wire:loading.attr="disabled" wire:target="sendToMd,mdPick">
+                            <span wire:loading.remove wire:target="sendToMd"><i class="bi bi-check2-square me-1"></i><?php echo e($mdSent ? (count($mdFiles) ? 'Save the added documents' : 'Save changes') : 'Save & mark as sent for review'); ?></span>
+                            <span wire:loading wire:target="sendToMd"><span class="spinner-border spinner-border-sm me-1"></span> Saving…</span>
+                        </button>
+                    </div>
+                </div>
+            <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
         </div>
+
+        
+        <div class="d-flex align-items-center gap-2 mb-2">
+            <span class="pill <?php echo e($mdDone ? 'pill-ok' : 'pill-warn'); ?>">2</span>
+            <span class="fw-semibold text-navy small">Record the outcome of the Managing Director's review</span>
+        </div>
+
+        <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($canMd && ! $mdSent): ?>
+            <div class="small text-muted mb-2"><i class="bi bi-info-circle me-1"></i> You can fill this in while waiting; the outcome can be recorded once the documents have been sent (step 1).</div>
+        <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
 
         <dt class="detail-label mb-2">The review confirms that</dt>
         <ul class="checklist mb-3">
@@ -280,15 +449,15 @@ use Livewire\WithFileUploads;
         <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($canMd): ?>
             <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($this->blockers): ?>
                 <div class="callout callout-warning small mb-3">
-                    <div class="fw-semibold mb-1"><i class="bi bi-list-check me-1"></i> Before the Managing Director can sign (<?php echo e(count($this->blockers)); ?>)</div>
+                    <div class="fw-semibold mb-1"><i class="bi bi-list-check me-1"></i> Before the documents can go to the Principal Secretary (<?php echo e(count($this->blockers)); ?>)</div>
                     <ul class="evidence-list mb-0"><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::openLoop(); ?><?php endif; ?><?php $__currentLoopData = $this->blockers; $__env->addLoop($__currentLoopData); foreach($__currentLoopData as $b): $__env->incrementLoopIndices(); $loop = $__env->getLastLoop(); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::startLoopIteration(); ?><?php endif; ?> <li><?php echo e($b); ?></li> <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::endLoop(); ?><?php endif; ?><?php endforeach; $__env->popLoop(); $loop = $__env->getLastLoop(); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::closeLoop(); ?><?php endif; ?></ul>
                 </div>
             <?php else: ?>
-                <div class="callout callout-success small mb-3"><i class="bi bi-check2-circle me-1"></i> Ready to sign and forward to the Principal Secretary.</div>
+                <div class="callout callout-success small mb-3"><i class="bi bi-check2-circle me-1"></i> Ready to forward to the Principal Secretary for signature.</div>
             <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
         <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
 
-        <label class="form-label small fw-semibold">Decision <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($canMd): ?> <span class="req">*</span> <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?></label>
+        <label class="form-label small fw-semibold">Outcome of the review <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($canMd): ?> <span class="req">*</span> <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?></label>
         <div class="choice-group cols-3 <?php $__errorArgs = ['md.decision'];
 $__bag = $errors->getBag($__errorArgs[1] ?? 'default');
 if ($__bag->has($__errorArgs[0])) :
@@ -318,7 +487,7 @@ unset($__errorArgs, $__bag); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendB
 
         <div class="row g-3 mt-1">
             <div class="col-12">
-                <label class="form-label small fw-semibold">Comments / rationale <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($canMd): ?> <span class="req">*</span> <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?></label>
+                <label class="form-label small fw-semibold">Comments / rationale <span class="text-muted fw-normal">(optional)</span></label>
                 <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($canMd): ?>
                     <textarea rows="3" class="form-control <?php $__errorArgs = ['md.comments'];
 $__bag = $errors->getBag($__errorArgs[1] ?? 'default');
@@ -328,7 +497,7 @@ $message = $__bag->first($__errorArgs[0]); ?> is-invalid <?php unset($message);
 if (isset($__messageOriginal)) { $message = $__messageOriginal; }
 endif;
 unset($__errorArgs, $__bag); ?>" wire:model.blur="md.comments"
-                              placeholder="<?php echo e(($md['decision'] ?? null) === 'return' ? 'What must be clarified or refined, and by whom' : 'Basis for the decision, and anything the Principal Secretary should note'); ?>"></textarea>
+                              placeholder="<?php echo e(($md['decision'] ?? null) === 'return' ? 'What must be clarified or refined, and by whom' : 'Basis for the outcome, and anything the Principal Secretary should note'); ?>"></textarea>
                     <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php $__errorArgs = ['md.comments'];
 $__bag = $errors->getBag($__errorArgs[1] ?? 'default');
 if ($__bag->has($__errorArgs[0])) :
@@ -342,11 +511,11 @@ unset($__errorArgs, $__bag); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendB
                 <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
             </div>
             <div class="col-md-6">
-                <label class="form-label small fw-semibold">Signed by (Managing Director)</label>
+                <label class="form-label small fw-semibold">Reviewed by (Managing Director)</label>
                 <input type="text" class="form-control bg-light" readonly value="<?php echo e($a?->md_signer_name ?: ($signing['md']['name'] ?? '') ?: '—'); ?>">
             </div>
             <div class="col-md-6">
-                <label class="form-label small fw-semibold">Date signed</label>
+                <label class="form-label small fw-semibold">Date of the review</label>
                 <input type="date" class="form-control <?php $__errorArgs = ['md.on'];
 $__bag = $errors->getBag($__errorArgs[1] ?? 'default');
 if ($__bag->has($__errorArgs[0])) :
@@ -369,8 +538,8 @@ unset($__errorArgs, $__bag); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendB
         <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($canMd): ?>
             <div class="d-flex flex-wrap gap-2 mt-4 pt-3 border-top">
                 <button type="button" class="btn btn-brand ms-auto" wire:click="recordMd" wire:loading.attr="disabled" wire:target="recordMd"
-                        wire:confirm="Record the Managing Director's signed decision? It can't be changed afterwards. The PMU will be e-mailed — and the applicant too if it is Not approve.">
-                    <span wire:loading.remove wire:target="recordMd"><i class="bi bi-send me-1"></i> Record Managing Director decision</span>
+                        wire:confirm="Record the outcome of the Managing Director's review? It can't be changed afterwards. The PMU will be e-mailed — and the applicant too if it is Not approve.">
+                    <span wire:loading.remove wire:target="recordMd"><i class="bi bi-send me-1"></i> Record review outcome</span>
                     <span wire:loading wire:target="recordMd"><span class="spinner-border spinner-border-sm me-1"></span> Recording…</span>
                 </button>
             </div>
@@ -378,139 +547,9 @@ unset($__errorArgs, $__bag); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendB
     </section>
 
     
-    <section class="section-card">
-        <div class="section-card-head">
-            <span class="section-no">2</span>
-            <div class="me-auto">
-                <h5>MTIBD Principal Secretary review and signature</h5>
-                <div class="small text-muted">
-                    <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($psDone): ?> Signed by <?php echo e($a->signerName('ps')); ?> on <?php echo e($a->ps_on?->format('d M Y')); ?> · recorded by <?php echo e($a->principalSecretary?->name ?? '—'); ?> on <?php echo e($a->ps_decided_at->format('d M Y H:i')); ?>.
-                    <?php else: ?> The second signature on the Grant Agreement — completing both signatures constitutes formal approval of the grant. <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
-                </div>
-            </div>
-            <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($psDone): ?>
-                <?php [$psL, , $psI] = $A::PS_DECISIONS[$a->ps_decision]; ?>
-                <span class="pill <?php echo e(['authorise' => 'pill-ok', 'clarify' => 'pill-warn', 'decline' => 'pill-danger'][$a->ps_decision]); ?>"><i class="bi <?php echo e($psI); ?>"></i> <?php echo e($psL); ?></span>
-            <?php elseif($stage === 'ps'): ?>
-                <span class="pill pill-warn"><i class="bi bi-hourglass-split"></i> Awaiting decision</span>
-            <?php else: ?>
-                <span class="pill pill-muted"><i class="bi bi-lock-fill"></i> Locked</span>
-            <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
-        </div>
-
-        <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if(! $psDone && $stage !== 'ps'): ?>
-            <div class="g1-locked">
-                <i class="bi bi-lock"></i>
-                <div>
-                    <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($mdDone && $a->md_decision !== 'approve'): ?> Not reached — the Managing Director did not sign the Grant Agreement.
-                    <?php else: ?> Opens once the Managing Director has signed the Grant Agreement and forwarded it. The signatures are sequential. <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
-                </div>
-            </div>
-        <?php else: ?>
-            <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($mdDone && $a->md_comments): ?>
-                <div class="quote mb-3"><?php echo e($a->md_comments); ?><div class="quote-meta">Managing Director (<?php echo e($a->signerName('md')); ?>) · <?php echo e($a->md_on?->format('d M Y')); ?></div></div>
-            <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
-
-            <?php echo $__env->make('expression-of-interest.authorisation.partials.signing', ['role' => 'ps', 'a' => $a, 'can' => $canPs, 'signing' => $signing, 'decidedRole' => $psDone, 'defaultDoc' => $canPs ? $this->defaultDocument('ps', $a) : null], array_diff_key(get_defined_vars(), ['__data' => 1, '__path' => 1]))->render(); ?>
-
-            <div class="d-flex align-items-center gap-2 mb-2">
-                <span class="pill <?php echo e($psDone ? 'pill-ok' : 'pill-warn'); ?>">3</span>
-                <span class="fw-semibold text-navy small">Record the Principal Secretary's decision, as written on the signed document</span>
-            </div>
-
-            <div class="choice-group cols-3 <?php $__errorArgs = ['ps.decision'];
-$__bag = $errors->getBag($__errorArgs[1] ?? 'default');
-if ($__bag->has($__errorArgs[0])) :
-if (isset($message)) { $__messageOriginal = $message; }
-$message = $__bag->first($__errorArgs[0]); ?> is-invalid <?php unset($message);
-if (isset($__messageOriginal)) { $message = $__messageOriginal; }
-endif;
-unset($__errorArgs, $__bag); ?>">
-                <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::openLoop(); ?><?php endif; ?><?php $__currentLoopData = $A::PS_DECISIONS; $__env->addLoop($__currentLoopData); foreach($__currentLoopData as $v => [$dLabel, $dDesc, $dIcon]): $__env->incrementLoopIndices(); $loop = $__env->getLastLoop(); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::startLoopIteration(); ?><?php endif; ?>
-                    <label class="choice choice--card">
-                        <input type="radio" name="ps-decision" value="<?php echo e($v); ?>" wire:model.live="ps.decision" <?php if(! $canPs): echo 'disabled'; endif; ?>>
-                        <span class="choice-box">
-                            <span class="choice-icon"><i class="bi <?php echo e($dIcon); ?>"></i></span>
-                            <span><span class="d-block fw-semibold"><?php echo e($dLabel); ?></span><span class="d-block small text-muted lh-sm mt-1"><?php echo e($dDesc); ?></span></span>
-                        </span>
-                    </label>
-                <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::endLoop(); ?><?php endif; ?><?php endforeach; $__env->popLoop(); $loop = $__env->getLastLoop(); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::closeLoop(); ?><?php endif; ?>
-            </div>
-            <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php $__errorArgs = ['ps.decision'];
-$__bag = $errors->getBag($__errorArgs[1] ?? 'default');
-if ($__bag->has($__errorArgs[0])) :
-if (isset($message)) { $__messageOriginal = $message; }
-$message = $__bag->first($__errorArgs[0]); ?> <div class="text-danger small mt-1"><?php echo e($message); ?></div> <?php unset($message);
-if (isset($__messageOriginal)) { $message = $__messageOriginal; }
-endif;
-unset($__errorArgs, $__bag); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
-
-            <div class="row g-3 mt-1">
-                <div class="col-12">
-                    <label class="form-label small fw-semibold">Comments <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($canPs && ($ps['decision'] ?? null) && $ps['decision'] !== 'authorise'): ?> <span class="req">*</span> <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?></label>
-                    <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($canPs): ?>
-                        <textarea rows="3" class="form-control <?php $__errorArgs = ['ps.comments'];
-$__bag = $errors->getBag($__errorArgs[1] ?? 'default');
-if ($__bag->has($__errorArgs[0])) :
-if (isset($message)) { $__messageOriginal = $message; }
-$message = $__bag->first($__errorArgs[0]); ?> is-invalid <?php unset($message);
-if (isset($__messageOriginal)) { $message = $__messageOriginal; }
-endif;
-unset($__errorArgs, $__bag); ?>" wire:model.blur="ps.comments"
-                                  placeholder="<?php echo e(($ps['decision'] ?? null) === 'clarify' ? 'What must be clarified or corrected' : (($ps['decision'] ?? null) === 'decline' ? 'Why the agreement is not signed' : 'Optional')); ?>"></textarea>
-                        <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php $__errorArgs = ['ps.comments'];
-$__bag = $errors->getBag($__errorArgs[1] ?? 'default');
-if ($__bag->has($__errorArgs[0])) :
-if (isset($message)) { $__messageOriginal = $message; }
-$message = $__bag->first($__errorArgs[0]); ?> <div class="invalid-feedback"><?php echo e($message); ?></div> <?php unset($message);
-if (isset($__messageOriginal)) { $message = $__messageOriginal; }
-endif;
-unset($__errorArgs, $__bag); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
-                    <?php else: ?>
-                        <div class="quote mb-0"><?php echo e($ps['comments'] ?: 'No comments.'); ?></div>
-                    <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
-                </div>
-                <div class="col-md-6">
-                    <label class="form-label small fw-semibold">Signed by (Principal Secretary)</label>
-                    <input type="text" class="form-control bg-light" readonly value="<?php echo e($a?->ps_signer_name ?: ($signing['ps']['name'] ?? '') ?: '—'); ?>">
-                </div>
-                <div class="col-md-6">
-                    <label class="form-label small fw-semibold">Date signed</label>
-                    <input type="date" class="form-control <?php $__errorArgs = ['ps.on'];
-$__bag = $errors->getBag($__errorArgs[1] ?? 'default');
-if ($__bag->has($__errorArgs[0])) :
-if (isset($message)) { $__messageOriginal = $message; }
-$message = $__bag->first($__errorArgs[0]); ?> is-invalid <?php unset($message);
-if (isset($__messageOriginal)) { $message = $__messageOriginal; }
-endif;
-unset($__errorArgs, $__bag); ?>" wire:model.blur="ps.on" max="<?php echo e(now()->toDateString()); ?>" <?php if(! $canPs): echo 'disabled'; endif; ?>>
-                    <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php $__errorArgs = ['ps.on'];
-$__bag = $errors->getBag($__errorArgs[1] ?? 'default');
-if ($__bag->has($__errorArgs[0])) :
-if (isset($message)) { $__messageOriginal = $message; }
-$message = $__bag->first($__errorArgs[0]); ?> <div class="invalid-feedback"><?php echo e($message); ?></div> <?php unset($message);
-if (isset($__messageOriginal)) { $message = $__messageOriginal; }
-endif;
-unset($__errorArgs, $__bag); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
-                </div>
-            </div>
-
-            <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($canPs): ?>
-                <div class="d-flex flex-wrap gap-2 mt-4 pt-3 border-top">
-                    <button type="button" class="btn btn-brand ms-auto" wire:click="recordPs" wire:loading.attr="disabled" wire:target="recordPs"
-                            wire:confirm="Record the Principal Secretary's signed decision? It can't be changed afterwards. The PMU will be e-mailed — and, if authorised or declined, the applicant, the Committee and Finance too.">
-                        <span wire:loading.remove wire:target="recordPs"><i class="bi bi-patch-check me-1"></i> Record Principal Secretary decision</span>
-                        <span wire:loading wire:target="recordPs"><span class="spinner-border spinner-border-sm me-1"></span> Recording…</span>
-                    </button>
-                </div>
-            <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
-        <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
-    </section>
-
-    
     <section class="section-card" id="g4-conditions">
         <div class="section-card-head">
-            <span class="section-no">3</span>
+            <span class="section-no">2</span>
             <div class="me-auto">
                 <h5>Conditions attached</h5>
                 <div class="small text-muted">Each condition is classified and assigned to the stage where it must be met — authorisation does not mean they are already satisfied.</div>
@@ -590,16 +629,171 @@ unset($__errorArgs, $__bag); ?>" wire:model.blur="conditions.<?php echo e($i); ?
     
     <section class="section-card">
         <div class="section-card-head">
-            <span class="section-no">4</span>
+            <span class="section-no">3</span>
             <div class="me-auto">
-                <h5>Gate 5 outcome &amp; handover</h5>
+                <h5>Principal Secretary signature &amp; handover</h5>
                 <div class="small text-muted">
                     <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($decided): ?> Round <?php echo e($round); ?> closed on <?php echo e($a->decided_at->format('d M Y H:i')); ?>.
-                    <?php else: ?> Recorded once both signatures are in — or as soon as either signatory returns the agreement or does not approve. <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+                    <?php else: ?> The PMU forwards the documents to the MTIBD Principal Secretary by e-mail and uploads the signed documents here. <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
                 </div>
             </div>
-            <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($decided): ?> <span class="pill <?php echo e($A::OUTCOMES[$outcome][4]); ?>"><i class="bi <?php echo e($A::OUTCOMES[$outcome][3]); ?>"></i> <?php echo e($A::OUTCOMES[$outcome][0]); ?></span> <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+            <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($decided): ?> <span class="pill <?php echo e($A::OUTCOMES[$outcome][4]); ?>"><i class="bi <?php echo e($A::OUTCOMES[$outcome][3]); ?>"></i> <?php echo e($A::OUTCOMES[$outcome][0]); ?></span>
+            <?php elseif($stage === 'ps'): ?> <span class="pill pill-warn"><i class="bi bi-hourglass-split"></i> Awaiting signature</span>
+            <?php else: ?> <span class="pill pill-muted"><i class="bi bi-lock-fill"></i> Locked</span> <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
         </div>
+
+        <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if(! $decided && $stage === 'ps'): ?>
+            
+            <div class="callout small mb-3">
+                <i class="bi bi-envelope-arrow-up me-1"></i>
+                The Managing Director is satisfied. <strong>Forward the documents to the MTIBD Principal Secretary by e-mail</strong> for signature (outside the system).
+                When they come back signed, upload them below and record the signature.
+                <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($mdDone && $a->md_comments): ?> <div class="quote mt-2 mb-0"><?php echo e($a->md_comments); ?><div class="quote-meta">Managing Director (<?php echo e($a->signerName('md')); ?>) · <?php echo e($a->md_on?->format('d M Y')); ?></div></div> <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+            </div>
+
+            <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($mdDocs->isNotEmpty()): ?>
+                <dt class="detail-label mb-2">Documents to forward</dt>
+                <?php echo $__env->make('expression-of-interest.authorisation.partials.documents', ['docs' => $mdDocs, 'canRemove' => false, 'empty' => null], array_diff_key(get_defined_vars(), ['__data' => 1, '__path' => 1]))->render(); ?>
+            <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+
+            <dt class="detail-label mt-3 mb-2">Signed documents from the Principal Secretary <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($canPs): ?> <span class="req">*</span> <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?></dt>
+            <?php echo $__env->make('expression-of-interest.authorisation.partials.documents', ['docs' => $psDocs, 'canRemove' => $canPs, 'empty' => 'No signed documents uploaded yet.'], array_diff_key(get_defined_vars(), ['__data' => 1, '__path' => 1]))->render(); ?>
+
+            <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($canPs): ?>
+                <div class="mt-2">
+                    <span wire:loading wire:target="psFiles" class="small text-muted"><span class="spinner-border spinner-border-sm me-1"></span> Uploading…</span>
+                    <div wire:loading.remove wire:target="psFiles" <?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::$currentLoop['key'] = 'ps-pick-'.e($pickKey).''; ?>wire:key="ps-pick-<?php echo e($pickKey); ?>">
+                        <input type="file" multiple class="form-control form-control-sm <?php $__errorArgs = ['psFiles'];
+$__bag = $errors->getBag($__errorArgs[1] ?? 'default');
+if ($__bag->has($__errorArgs[0])) :
+if (isset($message)) { $__messageOriginal = $message; }
+$message = $__bag->first($__errorArgs[0]); ?> is-invalid <?php unset($message);
+if (isset($__messageOriginal)) { $message = $__messageOriginal; }
+endif;
+unset($__errorArgs, $__bag); ?> <?php $__errorArgs = ['psFiles.*'];
+$__bag = $errors->getBag($__errorArgs[1] ?? 'default');
+if ($__bag->has($__errorArgs[0])) :
+if (isset($message)) { $__messageOriginal = $message; }
+$message = $__bag->first($__errorArgs[0]); ?> is-invalid <?php unset($message);
+if (isset($__messageOriginal)) { $message = $__messageOriginal; }
+endif;
+unset($__errorArgs, $__bag); ?>"
+                               wire:model="psFiles" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png">
+                        <div class="form-text">Choose the signed files one at a time (or several at once) — the signed Grant Agreement and any signed annexes. Each file is saved and added to the list above as soon as it uploads; remove one with <i class="bi bi-trash"></i>. PDF, Word, or clear scans / photos, up to <?php echo e($A::MAX_KB / 1024); ?> MB each.</div>
+                        <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php $__errorArgs = ['psFiles'];
+$__bag = $errors->getBag($__errorArgs[1] ?? 'default');
+if ($__bag->has($__errorArgs[0])) :
+if (isset($message)) { $__messageOriginal = $message; }
+$message = $__bag->first($__errorArgs[0]); ?> <div class="invalid-feedback d-block"><?php echo e($message); ?></div> <?php unset($message);
+if (isset($__messageOriginal)) { $message = $__messageOriginal; }
+endif;
+unset($__errorArgs, $__bag); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+                        <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php $__errorArgs = ['psFiles.*'];
+$__bag = $errors->getBag($__errorArgs[1] ?? 'default');
+if ($__bag->has($__errorArgs[0])) :
+if (isset($message)) { $__messageOriginal = $message; }
+$message = $__bag->first($__errorArgs[0]); ?> <div class="invalid-feedback d-block"><?php echo e($message); ?></div> <?php unset($message);
+if (isset($__messageOriginal)) { $message = $__messageOriginal; }
+endif;
+unset($__errorArgs, $__bag); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+                    </div>
+                </div>
+
+                <div class="row g-3 mt-1">
+                    <div class="col-md-4">
+                        <label class="form-label small fw-semibold">Signed by (Principal Secretary) <span class="req">*</span></label>
+                        <input type="text" class="form-control <?php $__errorArgs = ['signing.ps.name'];
+$__bag = $errors->getBag($__errorArgs[1] ?? 'default');
+if ($__bag->has($__errorArgs[0])) :
+if (isset($message)) { $__messageOriginal = $message; }
+$message = $__bag->first($__errorArgs[0]); ?> is-invalid <?php unset($message);
+if (isset($__messageOriginal)) { $message = $__messageOriginal; }
+endif;
+unset($__errorArgs, $__bag); ?>" wire:model="signing.ps.name" placeholder="<?php echo e($A::AUTHORITIES['ps'][0]); ?>">
+                        <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php $__errorArgs = ['signing.ps.name'];
+$__bag = $errors->getBag($__errorArgs[1] ?? 'default');
+if ($__bag->has($__errorArgs[0])) :
+if (isset($message)) { $__messageOriginal = $message; }
+$message = $__bag->first($__errorArgs[0]); ?> <div class="invalid-feedback"><?php echo e($message); ?></div> <?php unset($message);
+if (isset($__messageOriginal)) { $message = $__messageOriginal; }
+endif;
+unset($__errorArgs, $__bag); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label small fw-semibold">E-mail it was sent to</label>
+                        <input type="email" class="form-control <?php $__errorArgs = ['signing.ps.email'];
+$__bag = $errors->getBag($__errorArgs[1] ?? 'default');
+if ($__bag->has($__errorArgs[0])) :
+if (isset($message)) { $__messageOriginal = $message; }
+$message = $__bag->first($__errorArgs[0]); ?> is-invalid <?php unset($message);
+if (isset($__messageOriginal)) { $message = $__messageOriginal; }
+endif;
+unset($__errorArgs, $__bag); ?>" wire:model="signing.ps.email">
+                        <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php $__errorArgs = ['signing.ps.email'];
+$__bag = $errors->getBag($__errorArgs[1] ?? 'default');
+if ($__bag->has($__errorArgs[0])) :
+if (isset($message)) { $__messageOriginal = $message; }
+$message = $__bag->first($__errorArgs[0]); ?> <div class="invalid-feedback"><?php echo e($message); ?></div> <?php unset($message);
+if (isset($__messageOriginal)) { $message = $__messageOriginal; }
+endif;
+unset($__errorArgs, $__bag); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label small fw-semibold">Date signed <span class="req">*</span></label>
+                        <input type="date" class="form-control <?php $__errorArgs = ['ps.on'];
+$__bag = $errors->getBag($__errorArgs[1] ?? 'default');
+if ($__bag->has($__errorArgs[0])) :
+if (isset($message)) { $__messageOriginal = $message; }
+$message = $__bag->first($__errorArgs[0]); ?> is-invalid <?php unset($message);
+if (isset($__messageOriginal)) { $message = $__messageOriginal; }
+endif;
+unset($__errorArgs, $__bag); ?>" wire:model.blur="ps.on" max="<?php echo e(now()->toDateString()); ?>">
+                        <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php $__errorArgs = ['ps.on'];
+$__bag = $errors->getBag($__errorArgs[1] ?? 'default');
+if ($__bag->has($__errorArgs[0])) :
+if (isset($message)) { $__messageOriginal = $message; }
+$message = $__bag->first($__errorArgs[0]); ?> <div class="invalid-feedback"><?php echo e($message); ?></div> <?php unset($message);
+if (isset($__messageOriginal)) { $message = $__messageOriginal; }
+endif;
+unset($__errorArgs, $__bag); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label small fw-semibold">Note (optional)</label>
+                        <textarea rows="2" class="form-control <?php $__errorArgs = ['ps.comments'];
+$__bag = $errors->getBag($__errorArgs[1] ?? 'default');
+if ($__bag->has($__errorArgs[0])) :
+if (isset($message)) { $__messageOriginal = $message; }
+$message = $__bag->first($__errorArgs[0]); ?> is-invalid <?php unset($message);
+if (isset($__messageOriginal)) { $message = $__messageOriginal; }
+endif;
+unset($__errorArgs, $__bag); ?>" wire:model.blur="ps.comments" placeholder="Anything noted by the Principal Secretary"></textarea>
+                        <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php $__errorArgs = ['ps.comments'];
+$__bag = $errors->getBag($__errorArgs[1] ?? 'default');
+if ($__bag->has($__errorArgs[0])) :
+if (isset($message)) { $__messageOriginal = $message; }
+$message = $__bag->first($__errorArgs[0]); ?> <div class="invalid-feedback"><?php echo e($message); ?></div> <?php unset($message);
+if (isset($__messageOriginal)) { $message = $__messageOriginal; }
+endif;
+unset($__errorArgs, $__bag); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+                    </div>
+                </div>
+
+                <div class="d-flex flex-wrap gap-2 mt-4 pt-3 border-top">
+                    <button type="button" class="btn btn-brand ms-auto" wire:click="recordPs" wire:loading.attr="disabled" wire:target="recordPs,psFiles"
+                            wire:confirm="Record the Principal Secretary's signature? The grant is formally approved and handed over to Gate 6. The applicant, PMU, Committee and Finance will be e-mailed.">
+                        <span wire:loading.remove wire:target="recordPs"><i class="bi bi-patch-check me-1"></i> Record signature — formally approve</span>
+                        <span wire:loading wire:target="recordPs"><span class="spinner-border spinner-border-sm me-1"></span> Recording…</span>
+                    </button>
+                </div>
+            <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+
+            <hr class="my-4">
+        <?php elseif(! $decided): ?>
+            <div class="g1-locked mb-3">
+                <i class="bi bi-lock"></i>
+                <div>Opens once the Managing Director is satisfied with the documents. The PMU then forwards them to the Principal Secretary by e-mail and uploads the signed documents here.</div>
+            </div>
+        <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
 
         <div class="row g-2 mb-3">
             <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::openLoop(); ?><?php endif; ?><?php $__currentLoopData = $A::OUTCOMES; $__env->addLoop($__currentLoopData); foreach($__currentLoopData as $ok => [$oLabel, $oMeaning, $oNext, $oIcon, $oPill]): $__env->incrementLoopIndices(); $loop = $__env->getLastLoop(); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::startLoopIteration(); ?><?php endif; ?>
@@ -616,21 +810,33 @@ unset($__errorArgs, $__bag); ?>" wire:model.blur="conditions.<?php echo e($i); ?
         <dt class="detail-label mb-2">Decision record</dt>
         <div class="table-responsive">
             <table class="table table-modern table-sm align-middle mb-3">
-                <thead><tr><th>Authority</th><th>Decision</th><th>Date signed</th><th>Comments</th><th>Signed copy</th></tr></thead>
+                <thead><tr><th>Authority</th><th>Outcome</th><th>Date</th><th>Comments</th><th>Documents</th></tr></thead>
                 <tbody>
                     <tr>
-                        <td class="small fw-semibold text-navy">CAFI Managing Director <div class="text-muted fw-normal"><?php echo e($a?->md_signer_name); ?></div></td>
+                        <td class="small fw-semibold text-navy">CAFI Managing Director <div class="text-muted fw-normal">Review · <?php echo e($a?->md_signer_name); ?></div></td>
                         <td><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($mdDone): ?><span class="pill <?php echo e(['approve' => 'pill-ok', 'return' => 'pill-warn', 'decline' => 'pill-danger'][$a->md_decision]); ?>"><?php echo e($A::MD_DECISIONS[$a->md_decision][0]); ?></span><?php else: ?><span class="pill pill-warn">Pending</span><?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?></td>
                         <td class="small <?php echo e($mdDone ? '' : 'text-faint'); ?>"><?php echo e($mdDone ? $a->md_on?->format('d M Y') : '—'); ?></td>
                         <td class="small <?php echo e($mdDone ? '' : 'text-faint'); ?>"><?php echo e($mdDone ? \Illuminate\Support\Str::limit($a->md_comments, 120) : '—'); ?></td>
-                        <td class="small"><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($a?->hasSignedCopy('md')): ?><a href="<?php echo e(route('gate4.file', [$a, 'md_signed'])); ?>" class="text-decoration-none"><i class="bi bi-file-earmark-check"></i> Download</a><?php else: ?><span class="text-faint">—</span><?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?></td>
+                        <td class="small">
+                            <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::openLoop(); ?><?php endif; ?><?php $__empty_1 = true; $__currentLoopData = $mdDocs; $__env->addLoop($__currentLoopData); foreach($__currentLoopData as $d): $__env->incrementLoopIndices(); $loop = $__env->getLastLoop(); $__empty_1 = false; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::startLoopIteration(); ?><?php endif; ?>
+                                <a href="<?php echo e(route('gate4.document', $d)); ?>" class="d-block text-decoration-none text-truncate" style="max-width: 220px"><i class="bi bi-paperclip"></i> <?php echo e($d->name); ?></a>
+                            <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::endLoop(); ?><?php endif; ?><?php endforeach; $__env->popLoop(); $loop = $__env->getLastLoop(); if ($__empty_1): ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::closeLoop(); ?><?php endif; ?>
+                                <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($a?->md_signed_path): ?> <a href="<?php echo e(route('gate4.file', [$a, 'md_signed'])); ?>" class="text-decoration-none"><i class="bi bi-file-earmark-check"></i> Signed copy</a> <?php else: ?> <span class="text-faint">—</span> <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+                            <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+                        </td>
                     </tr>
                     <tr>
-                        <td class="small fw-semibold text-navy">MTIBD Principal Secretary <div class="text-muted fw-normal"><?php echo e($a?->ps_signer_name); ?></div></td>
+                        <td class="small fw-semibold text-navy">MTIBD Principal Secretary <div class="text-muted fw-normal">Signature · <?php echo e($a?->ps_signer_name); ?></div></td>
                         <td><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($psDone): ?><span class="pill <?php echo e(['authorise' => 'pill-ok', 'clarify' => 'pill-warn', 'decline' => 'pill-danger'][$a->ps_decision]); ?>"><?php echo e($A::PS_DECISIONS[$a->ps_decision][0]); ?></span><?php elseif($stage === 'ps'): ?><span class="pill pill-warn">Pending</span><?php else: ?><span class="pill pill-muted">Not started</span><?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?></td>
                         <td class="small <?php echo e($psDone ? '' : 'text-faint'); ?>"><?php echo e($psDone ? $a->ps_on?->format('d M Y') : '—'); ?></td>
                         <td class="small <?php echo e($psDone ? '' : 'text-faint'); ?>"><?php echo e($psDone ? (\Illuminate\Support\Str::limit($a->ps_comments, 120) ?: '—') : '—'); ?></td>
-                        <td class="small"><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($a?->hasSignedCopy('ps')): ?><a href="<?php echo e(route('gate4.file', [$a, 'ps_signed'])); ?>" class="text-decoration-none"><i class="bi bi-file-earmark-check"></i> Download</a><?php else: ?><span class="text-faint">—</span><?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?></td>
+                        <td class="small">
+                            <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::openLoop(); ?><?php endif; ?><?php $__empty_1 = true; $__currentLoopData = $psDocs; $__env->addLoop($__currentLoopData); foreach($__currentLoopData as $d): $__env->incrementLoopIndices(); $loop = $__env->getLastLoop(); $__empty_1 = false; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::startLoopIteration(); ?><?php endif; ?>
+                                <a href="<?php echo e(route('gate4.document', $d)); ?>" class="d-block text-decoration-none text-truncate" style="max-width: 220px"><i class="bi bi-file-earmark-check"></i> <?php echo e($d->name); ?></a>
+                            <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::endLoop(); ?><?php endif; ?><?php endforeach; $__env->popLoop(); $loop = $__env->getLastLoop(); if ($__empty_1): ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::closeLoop(); ?><?php endif; ?>
+                                <span class="text-faint">—</span>
+                            <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+                        </td>
                     </tr>
                 </tbody>
             </table>
@@ -638,17 +844,17 @@ unset($__errorArgs, $__bag); ?>" wire:model.blur="conditions.<?php echo e($i); ?
 
         <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($outcome === 'authorised'): ?>
             <div class="callout callout-success small mb-0">
-                <i class="bi bi-box-arrow-in-right me-1"></i> Fully executed Grant Agreement — handed over to <strong>Gate 6</strong> for conditions precedent and onboarding
+                <i class="bi bi-box-arrow-in-right me-1"></i> Grant Agreement signed by the Principal Secretary — handed over to <strong>Gate 6</strong> for conditions precedent and onboarding
                 <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($openConds): ?> — <?php echo e($openConds); ?> <?php echo e(\Illuminate\Support\Str::plural('condition', $openConds)); ?> to be met. <?php else: ?>. <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
                 Disbursement remains subject to the conditions precedent and financial controls.
             </div>
         <?php elseif($outcome === 'not_authorised'): ?>
-            <div class="callout callout-warning small mb-0"><i class="bi bi-x-octagon me-1"></i> The grant did not receive the required signatures and cannot proceed. The applicant has been notified by e-mail.</div>
+            <div class="callout callout-warning small mb-0"><i class="bi bi-x-octagon me-1"></i> The grant was not approved and cannot proceed. The applicant has been notified by e-mail.</div>
         <?php elseif($outcome === 'clarification'): ?>
             <div class="callout callout-warning small mb-3">
                 <i class="bi bi-arrow-return-left me-1"></i>
                 Returned by the <?php echo e($a->heldBy() === 'ps' ? 'Principal Secretary' : 'Managing Director'); ?>.
-                Resolve the matters raised and resubmit — it goes back to the <?php echo e($a->heldBy() === 'ps' ? 'Principal Secretary (the Managing Director\'s approval stands)' : 'Managing Director'); ?>.
+                Resolve the matters raised and resubmit — it goes back to the <?php echo e($a->heldBy() === 'ps' ? 'Principal Secretary (the Managing Director\'s review stands)' : 'Managing Director, starting from the documents sent last time'); ?>.
             </div>
             <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($this->canResubmit): ?>
                 <label class="form-label small fw-semibold">How the clarification was addressed <span class="req">*</span></label>
@@ -674,10 +880,10 @@ unset($__errorArgs, $__bag); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendB
                     </button>
                 </div>
             <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
-        <?php else: ?>
+        <?php elseif($stage !== 'ps'): ?>
             <div class="empty-state py-4">
                 <div class="empty-icon"><i class="bi bi-box-arrow-in-right"></i></div>
-                <p class="small text-muted mb-0">Once both signatures are recorded, the transaction is handed over to <strong>Gate 6</strong> for conditions precedent and onboarding.</p>
+                <p class="small text-muted mb-0">Once the Principal Secretary's signed documents are uploaded, the transaction is handed over to <strong>Gate 6</strong> for conditions precedent and onboarding.</p>
             </div>
         <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
     </section>

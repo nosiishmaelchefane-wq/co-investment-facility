@@ -13,9 +13,11 @@ use Livewire\WithFileUploads;
 /*
 | Application tab · Investments
 |   Every investment made into the enterprise (declared on its profile or recorded here), grouped by investor.
-|   Investors are identified by their ID / passport number (or company registration number), so the same investor
-|   is recognised across enterprises: the "Investor portfolio" shows how much each one has put into each enterprise,
-|   which the facility uses to monitor their returns.
+|   Investors are recognised by name (company suffixes, case and punctuation ignored — EnterpriseInvestment::investorKey),
+|   so the same investor is recognised across enterprises: the "Investor portfolio" shows how much each one has put into
+|   each enterprise, which the facility uses to monitor their returns.
+|   ID / passport numbers are no longer requested. Numbers already on older records are kept (not shown) and still
+|   help link those records together.
 |   Investments are added by the enterprise on its profile ("Investments received") — not here.
 |   Reviewers (gate1.decide / gate2.assess) correct, verify and reject them and use the history at Gate 1.
 |   Embedded in the application page:  <livewire:expression-of-interest.investments.investment-history :eoi-id="$eoi->id" />
@@ -119,24 +121,20 @@ new class extends Component
 
     protected function blank(): array
     {
-        return ['investor_name' => '', 'investor_id_number' => '', 'investor_type' => '', 'investor_country' => '', 'amount' => '',
+        return ['investor_name' => '', 'investor_type' => '', 'investor_country' => '', 'amount' => '',
                 'invested_on' => '', 'instrument' => '', 'round_label' => '', 'notes' => ''];
     }
 
-    /** Typing a known investor's name fills in their ID number and country */
+    /** Typing a known investor's name fills in their type and country */
     public function updatedInvInvestorName(): void
     {
-        if (filled($this->inv['investor_id_number'] ?? null)) {
-            return;
-        }
-
         $nk    = EnterpriseInvestment::investorKey($this->inv['investor_name'] ?? '');
-        $known = collect($this->roundRows)->first(fn ($r) => EnterpriseInvestment::investorKey($r['name'] ?? '') === $nk && filled($r['id_number'] ?? null));
-        $group = $this->groups->first(fn ($g) => EnterpriseInvestment::investorKey($g['name']) === $nk && filled($g['id_number']));
+        $known = collect($this->roundRows)->first(fn ($r) => EnterpriseInvestment::investorKey($r['name'] ?? '') === $nk);
+        $group = $this->groups->first(fn ($g) => EnterpriseInvestment::investorKey($g['name']) === $nk);
 
         if ($known || $group) {
-            $this->inv['investor_id_number'] = $known['id_number'] ?? $group['id_number'];
-            $this->inv['investor_country']   = $this->inv['investor_country'] ?: ($known['country'] ?? $group['country'] ?? '');
+            $this->inv['investor_country'] = $this->inv['investor_country'] ?: ($known['country'] ?? $group['country'] ?? '');
+            $this->inv['investor_type']    = $this->inv['investor_type'] ?: ($group['type'] ?? '');
         }
     }
 
@@ -146,7 +144,7 @@ new class extends Component
 
         $i = $this->findInvestment($id);
         $this->inv = [
-            'investor_name' => $i->investor_name, 'investor_id_number' => $i->investor_id_number ?? '',
+            'investor_name' => $i->investor_name,
             'investor_type' => $i->investor_type ?? '', 'investor_country' => $i->investor_country ?? '',
             'amount' => (string) round((float) $i->amount), 'invested_on' => $i->invested_on?->format('Y-m-d') ?? '',
             'instrument' => $i->instrument ?? '', 'round_label' => $i->round_label ?? '', 'notes' => $i->notes ?? '',
@@ -171,21 +169,20 @@ new class extends Component
         abort_unless($this->canManage && $this->profile, 403);
 
         $this->validate([
-            'inv.investor_name'      => ['required', 'string', 'max:255'],
-            'inv.investor_id_number' => ['required', 'string', 'max:40'],
-            'inv.investor_type'      => ['nullable', Rule::in(EnterpriseProfile::INVESTOR_TYPES)],
-            'inv.investor_country'   => ['nullable', 'string', 'max:80'],
-            'inv.amount'             => ['required', 'numeric', 'gt:0', 'max:9999999999999'],
-            'inv.invested_on'        => ['required', 'date', 'before_or_equal:today'],
-            'inv.instrument'         => ['nullable', Rule::in(array_keys(EnterpriseInvestment::INSTRUMENTS))],
-            'inv.round_label'        => ['nullable', 'string', 'max:60'],
-            'inv.notes'              => ['nullable', 'string', 'max:1000'],
-            'invProof'               => ['nullable', 'file', 'mimes:'.EnterpriseInvestment::PROOF_MIMES, 'max:'.EnterpriseInvestment::MAX_KB],
+            'inv.investor_name'    => ['required', 'string', 'max:255'],
+            'inv.investor_type'    => ['nullable', Rule::in(EnterpriseProfile::INVESTOR_TYPES)],
+            'inv.investor_country' => ['nullable', 'string', 'max:80'],
+            'inv.amount'           => ['required', 'numeric', 'gt:0', 'max:9999999999999'],
+            'inv.invested_on'      => ['required', 'date', 'before_or_equal:today'],
+            'inv.instrument'       => ['nullable', Rule::in(array_keys(EnterpriseInvestment::INSTRUMENTS))],
+            'inv.round_label'      => ['nullable', 'string', 'max:60'],
+            'inv.notes'            => ['nullable', 'string', 'max:1000'],
+            'invProof'             => ['nullable', 'file', 'mimes:'.EnterpriseInvestment::PROOF_MIMES, 'max:'.EnterpriseInvestment::MAX_KB],
         ], [
             'invProof.max'   => 'The proof must be '.(EnterpriseInvestment::MAX_KB / 1024).' MB or smaller.',
             'invProof.mimes' => 'Upload a PDF, image, Word or Excel file.',
         ], [
-            'inv.investor_name' => 'investor name', 'inv.investor_id_number' => 'ID / passport number', 'inv.amount' => 'amount',
+            'inv.investor_name' => 'investor name', 'inv.amount' => 'amount',
             'inv.invested_on' => 'date of investment', 'inv.investor_type' => 'investor type', 'inv.instrument' => 'instrument',
             'inv.round_label' => 'round', 'invProof' => 'proof',
         ]);
@@ -194,7 +191,9 @@ new class extends Component
         abort_unless($this->invEditingId, 403);
         $i = $this->findInvestment($this->invEditingId);
 
-        $values = collect($this->inv)->map(fn ($v) => is_string($v) ? (trim($v) === '' ? null : trim($v)) : $v)->all();
+        // Only the fields on this form are changed (an ID number already on an older record is left as it is)
+        $values = collect($this->inv)->only(array_keys($this->blank()))
+            ->map(fn ($v) => is_string($v) ? (trim($v) === '' ? null : trim($v)) : $v)->all();
         $i->fill($values);
 
         if ($this->invProof) {
@@ -306,22 +305,17 @@ new class extends Component
         $rate = max((float) config('cif.usd_to_lsl', 18.00), 0.0001);
         $lsl  = fn ($m) => $m === null || $m === '' ? '—' : 'M '.number_format((float) $m);
         $usd  = fn ($m) => $m === null || $m === '' ? '' : 'US$ '.number_format((float) $m / $rate);
-        $idTag = fn (?string $id) => filled($id)
-            ? '<span class="small text-muted"><i class="bi bi-person-vcard me-1"></i>'.e($id).'</span>'
-            : '<span class="small text-warning-emphasis"><i class="bi bi-exclamation-circle me-1"></i>No ID number</span>';
 
         $counted   = $all->where('status', '!=', $I::STATUS_REJECTED);
         $total     = (float) $counted->sum('amount');
         $verified  = (float) $all->where('status', $I::STATUS_VERIFIED)->sum('amount');
         $pending   = $all->where('status', $I::STATUS_DECLARED)->count();
         $repeat    = $groups->where('count', '>', 1)->count();
-        $noId      = $all->filter(fn ($i) => blank($i->investor_id_number))->count();
         $committed = (float) collect($roundRows)->sum(fn ($r) => is_numeric($r['ticket'] ?? null) ? (float) $r['ticket'] : 0);
         $shown     = $investor === '' ? $all : $all->filter(fn ($i) => $i->investor_key === $investor);
 
-        // Display name / ID for an investor key
+        // Display name for an investor key
         $nameFor = fn ($key) => $groups->firstWhere('key', $key)['name'] ?? (collect($roundRows)->firstWhere('key', $key)['name'] ?? $key);
-        $idFor   = fn ($key) => $groups->firstWhere('key', $key)['id_number'] ?? (collect($roundRows)->firstWhere('key', $key)['id_number'] ?? null);
     @endphp
 
     {{-- ============================ INTRO ============================ --}}
@@ -330,7 +324,7 @@ new class extends Component
             <span class="stat-icon tone-primary"><i class="bi bi-bank"></i></span>
             <div class="me-auto" style="max-width: 640px">
                 <h5 class="mb-1 text-navy fw-bold">Investment history</h5>
-                <div class="small text-muted">Every investment made into {{ $p?->short_name ?: ($p?->registered_name ?: $this->eoi->business_name) }}, one row per investment. Investors are identified by their ID / passport number, so the <strong>Investor portfolio</strong> below shows how much each investor has put into every enterprise on the facility — use it to judge their track record at Gate 1 and to monitor their returns.</div>
+                <div class="small text-muted">Every investment made into {{ $p?->short_name ?: ($p?->registered_name ?: $this->eoi->business_name) }}, one row per investment. Investors are recognised by name, so the <strong>Investor portfolio</strong> below shows how much each investor has put into every enterprise on the facility — use it to judge their track record at Gate 1 and to monitor their returns.</div>
             </div>
             <button type="button" class="btn btn-sm btn-outline-secondary" wire:click="$parent.showTab('g1')"><i class="bi bi-arrow-left me-1"></i> Gate 1 · Eligibility</button>
         </div>
@@ -359,13 +353,6 @@ new class extends Component
         @endforeach
     </div>
 
-    @if ($noId)
-        <div class="callout callout-warning small mb-4">
-            <i class="bi bi-person-vcard me-1"></i> {{ $noId }} {{ \Illuminate\Support\Str::plural('investment', $noId) }} without an investor ID / passport number — matched by name only, so the investor may not be recognised across enterprises.
-            @if ($canManage) Edit {{ $noId === 1 ? 'it' : 'them' }} to add the number. @endif
-        </div>
-    @endif
-
     @if ($all->isEmpty())
         <div class="callout small mb-4">
             <i class="bi bi-info-circle me-1"></i> <strong>No investments recorded yet.</strong>
@@ -383,17 +370,14 @@ new class extends Component
             <div class="card-body">
                 <div class="card-title-sm"><i class="bi bi-pencil-square"></i> Edit investment</div>
                 <div class="row g-2">
-                    <div class="col-md-5"><label class="form-label small fw-semibold">Investor name <span class="req">*</span></label>
+                    <div class="col-md-6"><label class="form-label small fw-semibold">Investor name <span class="req">*</span></label>
                         <input type="text" class="form-control form-control-sm @error('inv.investor_name') is-invalid @enderror" wire:model.blur="inv.investor_name" list="known-investors">
                         <datalist id="known-investors">@foreach ($groups as $g)<option value="{{ $g['name'] }}">@endforeach @foreach ($roundRows as $r)<option value="{{ $r['name'] }}">@endforeach</datalist>
+                        <div class="form-text">Use the same spelling each time — investors are recognised across enterprises by name.</div>
                         @error('inv.investor_name') <div class="invalid-feedback">{{ $message }}</div> @enderror</div>
-                    <div class="col-md-3"><label class="form-label small fw-semibold">ID / passport no. <span class="req">*</span></label>
-                        <input type="text" class="form-control form-control-sm @error('inv.investor_id_number') is-invalid @enderror" wire:model="inv.investor_id_number" placeholder="or company reg. no.">
-                        <div class="form-text">Identifies the investor across enterprises.</div>
-                        @error('inv.investor_id_number') <div class="invalid-feedback">{{ $message }}</div> @enderror</div>
-                    <div class="col-md-2"><label class="form-label small fw-semibold">Investor type</label>
+                    <div class="col-md-3"><label class="form-label small fw-semibold">Investor type</label>
                         <select class="form-select form-select-sm" wire:model="inv.investor_type"><option value="">Select…</option>@foreach ($P::INVESTOR_TYPES as $o)<option>{{ $o }}</option>@endforeach</select></div>
-                    <div class="col-md-2"><label class="form-label small fw-semibold">Country</label>
+                    <div class="col-md-3"><label class="form-label small fw-semibold">Country</label>
                         <input type="text" class="form-control form-control-sm" wire:model="inv.investor_country"></div>
                     <div class="col-md-4"><label class="form-label small fw-semibold">Amount (M) <span class="req">*</span></label>
                         <input type="number" min="0" step="1000" class="form-control form-control-sm @error('inv.amount') is-invalid @enderror" wire:model.blur="inv.amount">
@@ -436,7 +420,6 @@ new class extends Component
                                 @php $fr = $facility[$g['key']] ?? null; @endphp
                                 <tr wire:key="grp-{{ md5($g['key']) }}" class="{{ $investor === $g['key'] ? 'table-active' : '' }}">
                                     <td><div class="fw-semibold text-navy small">{{ $g['name'] }}</div>
-                                        <div>{!! $idTag($g['id_number']) !!}</div>
                                         <div class="small text-muted">{{ collect([$g['type'], $g['country']])->filter()->implode(' · ') }}</div></td>
                                     <td class="text-center">
                                         <span class="fw-bold text-navy">{{ $g['count'] }}</span>
@@ -455,7 +438,7 @@ new class extends Component
                         </tbody>
                     </table>
                 </div>
-                <div class="small text-muted mt-2"><i class="bi bi-info-circle me-1"></i> Rejected investments are not counted. Investors are matched by ID / passport number; records without a number are matched by name.</div>
+                <div class="small text-muted mt-2"><i class="bi bi-info-circle me-1"></i> Rejected investments are not counted. Investors are matched by name (ignoring case, punctuation and "(Pty) Ltd").</div>
             @endif
         </div>
     </div>
@@ -477,7 +460,6 @@ new class extends Component
                                 @endphp
                                 <tr wire:key="round-{{ $ri }}">
                                     <td><div class="fw-semibold text-navy small">{{ $r['name'] }}</div>
-                                        <div>{!! $idTag($r['id_number'] ?? null) !!}</div>
                                         <div class="small text-muted">{{ $r['country'] ?? '' }}</div></td>
                                     <td class="text-end text-nowrap">{{ $lsl($r['ticket'] ?? null) }}<div class="small text-muted">{{ $usd($r['ticket'] ?? null) }}</div></td>
                                     <td class="small">
@@ -508,10 +490,7 @@ new class extends Component
                 @foreach ($facility as $key => $fr)
                     <details class="border rounded-3 mb-2" id="track-{{ md5($key) }}" @if ($loop->first) open @endif>
                         <summary class="d-flex flex-wrap align-items-center gap-2 p-2" style="cursor: pointer">
-                            <span class="me-auto">
-                                <span class="fw-semibold text-navy small">{{ $nameFor($key) }}</span>
-                                <span class="ms-2">{!! $idTag($idFor($key)) !!}</span>
-                            </span>
+                            <span class="me-auto fw-semibold text-navy small">{{ $nameFor($key) }}</span>
                             <span class="pill {{ $fr['investments'] > 1 ? 'pill-ok' : 'pill-muted' }}"><i class="bi bi-receipt"></i> {{ $fr['investments'] }} {{ \Illuminate\Support\Str::plural('investment', $fr['investments']) }}</span>
                             <span class="pill pill-muted"><i class="bi bi-buildings"></i> {{ $fr['enterprises'] }} {{ \Illuminate\Support\Str::plural('enterprise', $fr['enterprises']) }}</span>
                             <span class="small fw-semibold text-navy">{{ $lsl($fr['total']) }}</span>
@@ -576,7 +555,6 @@ new class extends Component
                                 <tr wire:key="inv-{{ $i->id }}">
                                     <td class="small text-nowrap">{{ $i->invested_on?->format('d M Y') }}</td>
                                     <td><div class="fw-semibold text-navy small">{{ $i->investor_name }}</div>
-                                        <div>{!! $idTag($i->investor_id_number) !!}</div>
                                         <div class="small text-muted">{{ $I::SOURCES[$i->source] ?? '' }}@if ($i->recorder && $i->source === 'reviewer') ({{ $i->recorder->name }})@endif</div>
                                         @if ($i->notes) <div class="small text-muted fst-italic">{{ $i->notes }}</div> @endif</td>
                                     <td class="text-end text-nowrap">{{ $lsl($i->amount) }}<div class="small text-muted">{{ $usd($i->amount) }}</div></td>

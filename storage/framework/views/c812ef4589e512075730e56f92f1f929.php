@@ -18,15 +18,22 @@ use Livewire\Component;
     /* Form options — keys are stored in the DB, labels are shown to the applicant */
     $districts = ['Berea', 'Butha-Buthe', 'Leribe', 'Mafeteng', 'Maseru', "Mohale's Hoek", 'Mokhotlong', "Qacha's Nek", 'Quthing', 'Thaba-Tseka'];
 
+    $rate    = max((float) config('cif.usd_to_lsl', 18.00), 0.0001);
+    $bandUsd = fn (int $m) => 'US$ '.number_format(round($m / $rate / 1000) * 1000);
+
     $legalStatuses = [
         'registered_operating'     => 'Yes, registered and operating in Lesotho',
         'registered_not_operating' => 'Registered but operations are not yet established',
         'registration_in_progress' => 'Registration is in progress',
         'not_registered'           => 'Not registered',
     ];
+    // Bands are kept in Maloti (stored keys); US$ is shown first, as on the profile
     $turnoverBands = [
-        'below_500k' => 'Below M500,000', '500k_2m' => 'M500,000 – M2 million', '2m_5m' => 'M2 – M5 million',
-        '5m_10m' => 'M5 – M10 million', 'above_10m' => 'Above M10 million',
+        'below_500k' => 'Below '.$bandUsd(500000).' (M500,000)',
+        '500k_2m'    => $bandUsd(500000).' – '.$bandUsd(2000000).' (M500,000 – M2 million)',
+        '2m_5m'      => $bandUsd(2000000).' – '.$bandUsd(5000000).' (M2 – M5 million)',
+        '5m_10m'     => $bandUsd(5000000).' – '.$bandUsd(10000000).' (M5 – M10 million)',
+        'above_10m'  => 'Above '.$bandUsd(10000000).' (M10 million)',
     ];
     $investmentTypes = ['equity' => 'Equity', 'quasi_equity' => 'Quasi-equity', 'debt' => 'Debt'];
     $useOfFunds = [
@@ -56,12 +63,11 @@ use Livewire\Component;
         4 => ['Investor', 'bi-briefcase'], 5 => ['Support', 'bi-signpost-split'], 6 => ['Review', 'bi-check2-square'],
     ];
 
-    /* Helpers for the review step */
-    $one  = fn ($map, $v) => $v === null || $v === '' ? null : ($map[$v] ?? $v);
-    $many = fn ($map, $vals) => collect($vals ?? [])->map(fn ($v) => $map[$v] ?? $v)->implode(', ') ?: null;
-    $rate  = max((float) config('cif.usd_to_lsl', 18.00), 0.0001);
-    $toUsd = fn ($m) => 'US$ '.number_format((float) $m / $rate);
-    $lslUsd = fn ($m) => $m === null || $m === '' ? null : 'M '.number_format((float) $m).' (≈ '.$toUsd($m).')';
+    /* Helpers — amounts are entered in US$; Maloti is shown underneath */
+    $one    = fn ($map, $v) => $v === null || $v === '' ? null : ($map[$v] ?? $v);
+    $many   = fn ($map, $vals) => collect($vals ?? [])->map(fn ($v) => $map[$v] ?? $v)->implode(', ') ?: null;
+    $toLsl  = fn ($u) => 'M '.number_format((float) $u * $rate);
+    $usdLsl = fn ($u) => $u === null || $u === '' ? null : 'US$ '.number_format((float) $u).' (≈ '.$toLsl($u).')';
 
     $showUseOther      = in_array('other', $form['use_of_funds'] ?? [], true);
     $showStatusOther   = ($form['investor_status'] ?? '') === 'other';
@@ -260,9 +266,10 @@ if (isset($__messageOriginal)) { $message = $__messageOriginal; }
 endif;
 unset($__errorArgs, $__bag); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
 
-                    <div class="mt-3" style="max-width: 320px;">
-                        <label class="form-label" for="year_commenced">When did the business commence operations? <?php echo $fp('year_commenced'); ?></label>
-                        <input type="number" id="year_commenced" wire:model="form.year_commenced" min="1950" max="<?php echo e(date('Y')); ?>" placeholder="Year" class="form-control <?php $__errorArgs = ['form.year_commenced'];
+                    <div class="row g-3 mt-1">
+                        <div class="col-md-6">
+                            <label class="form-label" for="registration_no">Company registration number <span class="opt">(OBFC)</span> <?php echo $fp('registration_no'); ?></label>
+                            <input type="text" id="registration_no" wire:model="form.registration_no" placeholder="e.g. RC123456" class="form-control <?php $__errorArgs = ['form.registration_no'];
 $__bag = $errors->getBag($__errorArgs[1] ?? 'default');
 if ($__bag->has($__errorArgs[0])) :
 if (isset($message)) { $__messageOriginal = $message; }
@@ -270,7 +277,7 @@ $message = $__bag->first($__errorArgs[0]); ?> is-invalid <?php unset($message);
 if (isset($__messageOriginal)) { $message = $__messageOriginal; }
 endif;
 unset($__errorArgs, $__bag); ?>">
-                        <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php $__errorArgs = ['form.year_commenced'];
+                            <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php $__errorArgs = ['form.registration_no'];
 $__bag = $errors->getBag($__errorArgs[1] ?? 'default');
 if ($__bag->has($__errorArgs[0])) :
 if (isset($message)) { $__messageOriginal = $message; }
@@ -278,6 +285,26 @@ $message = $__bag->first($__errorArgs[0]); ?> <div class="invalid-feedback"><?ph
 if (isset($__messageOriginal)) { $message = $__messageOriginal; }
 endif;
 unset($__errorArgs, $__bag); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="year_commenced">When did the business commence operations? <?php echo $fp('year_commenced'); ?></label>
+                            <input type="number" id="year_commenced" wire:model="form.year_commenced" min="1950" max="<?php echo e(date('Y')); ?>" placeholder="Year" class="form-control <?php $__errorArgs = ['form.year_commenced'];
+$__bag = $errors->getBag($__errorArgs[1] ?? 'default');
+if ($__bag->has($__errorArgs[0])) :
+if (isset($message)) { $__messageOriginal = $message; }
+$message = $__bag->first($__errorArgs[0]); ?> is-invalid <?php unset($message);
+if (isset($__messageOriginal)) { $message = $__messageOriginal; }
+endif;
+unset($__errorArgs, $__bag); ?>">
+                            <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php $__errorArgs = ['form.year_commenced'];
+$__bag = $errors->getBag($__errorArgs[1] ?? 'default');
+if ($__bag->has($__errorArgs[0])) :
+if (isset($message)) { $__messageOriginal = $message; }
+$message = $__bag->first($__errorArgs[0]); ?> <div class="invalid-feedback"><?php echo e($message); ?></div> <?php unset($message);
+if (isset($__messageOriginal)) { $message = $__messageOriginal; }
+endif;
+unset($__errorArgs, $__bag); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+                        </div>
                     </div>
                 </section>
             <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
@@ -372,10 +399,10 @@ unset($__errorArgs, $__bag); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendB
                         <div><h6>What investment are you seeking?</h6></div>
                     </div>
                     <div style="max-width: 360px;">
-                        <label class="form-label" for="investment_required_lsl">Total investment required for your growth plans <span class="req">*</span> <?php echo $fp('investment_required_lsl'); ?></label>
+                        <label class="form-label" for="investment_required_usd">Total investment required for your growth plans <span class="req">*</span> <?php echo $fp('investment_required_usd'); ?></label>
                         <div class="input-group has-validation">
-                            <span class="input-group-text">M</span>
-                            <input type="number" id="investment_required_lsl" min="0" step="1000" wire:model.blur="form.investment_required_lsl" class="form-control <?php $__errorArgs = ['form.investment_required_lsl'];
+                            <span class="input-group-text">US$</span>
+                            <input type="number" id="investment_required_usd" min="0" step="1000" wire:model.live.debounce.500ms="form.investment_required_usd" class="form-control <?php $__errorArgs = ['form.investment_required_usd'];
 $__bag = $errors->getBag($__errorArgs[1] ?? 'default');
 if ($__bag->has($__errorArgs[0])) :
 if (isset($message)) { $__messageOriginal = $message; }
@@ -383,7 +410,7 @@ $message = $__bag->first($__errorArgs[0]); ?> is-invalid <?php unset($message);
 if (isset($__messageOriginal)) { $message = $__messageOriginal; }
 endif;
 unset($__errorArgs, $__bag); ?>">
-                            <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php $__errorArgs = ['form.investment_required_lsl'];
+                            <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php $__errorArgs = ['form.investment_required_usd'];
 $__bag = $errors->getBag($__errorArgs[1] ?? 'default');
 if ($__bag->has($__errorArgs[0])) :
 if (isset($message)) { $__messageOriginal = $message; }
@@ -393,8 +420,8 @@ endif;
 unset($__errorArgs, $__bag); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
                         </div>
                         <div class="form-text">
-                            <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if(filled($form['investment_required_lsl'])): ?> ≈ <?php echo e($toUsd($form['investment_required_lsl'])); ?> <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
-                            <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if(in_array('investment_required_lsl', $fromProfile, true)): ?> <span class="d-block">Taken from your enterprise profile (total project cost, or the current investment round).</span> <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+                            <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if(is_numeric($form['investment_required_usd'])): ?> ≈ <?php echo e($toLsl($form['investment_required_usd'])); ?> <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+                            <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if(in_array('investment_required_usd', $fromProfile, true)): ?> <span class="d-block">Taken from the total project cost in your enterprise profile.</span> <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
                         </div>
                     </div>
 
@@ -425,7 +452,7 @@ unset($__errorArgs, $__bag); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendB
 
                     <div class="form-section-head mt-4">
                         <span class="q-badge">Q6</span>
-                        <div><h6>How would the investment be used? <span class="req">*</span></h6><p>Select all that apply.</p></div>
+                        <div><h6>How would the investment be used? <span class="req">*</span> <?php echo $fp('use_of_funds'); ?></h6><p>Select all that apply.</p></div>
                     </div>
                     <div class="choice-group cols-2 <?php $__errorArgs = ['form.use_of_funds'];
 $__bag = $errors->getBag($__errorArgs[1] ?? 'default');
@@ -450,6 +477,9 @@ $message = $__bag->first($__errorArgs[0]); ?> <div class="text-danger small mt-1
 if (isset($__messageOriginal)) { $message = $__messageOriginal; }
 endif;
 unset($__errorArgs, $__bag); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+                    <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if(in_array('use_of_funds', $fromProfile, true)): ?>
+                        <div class="form-text">Ticked from the categories in your grant utilisation budget.</div>
+                    <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
 
                     <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($showUseOther): ?>
                         <input type="text" wire:model="form.use_of_funds_other" placeholder="Please specify" class="form-control mt-2">
@@ -476,6 +506,57 @@ if (isset($__messageOriginal)) { $message = $__messageOriginal; }
 endif;
 unset($__errorArgs, $__bag); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
                     </div>
+
+                    <div class="form-section-head mt-4">
+                        <span class="q-badge"><i class="bi bi-cash-stack"></i></span>
+                        <div><h6>CAFI grant requested</h6><p>The grant-only budget from section 8.4 of your enterprise profile.</p></div>
+                    </div>
+                    <div style="max-width: 360px;">
+                        <label class="form-label" for="grant_requested_usd">Total CAFI grant requested <?php echo $fp('grant_requested_usd'); ?></label>
+                        <div class="input-group has-validation">
+                            <span class="input-group-text">US$</span>
+                            <input type="number" id="grant_requested_usd" min="0" step="1000" wire:model.live.debounce.500ms="form.grant_requested_usd" class="form-control <?php $__errorArgs = ['form.grant_requested_usd'];
+$__bag = $errors->getBag($__errorArgs[1] ?? 'default');
+if ($__bag->has($__errorArgs[0])) :
+if (isset($message)) { $__messageOriginal = $message; }
+$message = $__bag->first($__errorArgs[0]); ?> is-invalid <?php unset($message);
+if (isset($__messageOriginal)) { $message = $__messageOriginal; }
+endif;
+unset($__errorArgs, $__bag); ?>">
+                            <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php $__errorArgs = ['form.grant_requested_usd'];
+$__bag = $errors->getBag($__errorArgs[1] ?? 'default');
+if ($__bag->has($__errorArgs[0])) :
+if (isset($message)) { $__messageOriginal = $message; }
+$message = $__bag->first($__errorArgs[0]); ?> <div class="invalid-feedback"><?php echo e($message); ?></div> <?php unset($message);
+if (isset($__messageOriginal)) { $message = $__messageOriginal; }
+endif;
+unset($__errorArgs, $__bag); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+                        </div>
+                        <div class="form-text">
+                            <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if(is_numeric($form['grant_requested_usd'])): ?> ≈ <?php echo e($toLsl($form['grant_requested_usd'])); ?> <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+                            <span class="d-block">Grant rule: <?php echo e($P::grantRatioLabel()); ?>.</span>
+                        </div>
+                    </div>
+                    <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if(! empty($form['grant_budget'])): ?>
+                        <div class="table-responsive mt-3">
+                            <table class="table table-sm align-middle mb-0 small">
+                                <thead><tr><th>Budget category</th><th class="text-end">US$</th><th class="text-end text-muted">Maloti</th></tr></thead>
+                                <tbody>
+                                    <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::openLoop(); ?><?php endif; ?><?php $__currentLoopData = $form['grant_budget']; $__env->addLoop($__currentLoopData); foreach($__currentLoopData as $cat => $amount): $__env->incrementLoopIndices(); $loop = $__env->getLastLoop(); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::startLoopIteration(); ?><?php endif; ?>
+                                        <tr <?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::$currentLoop['key'] = 'gb-'.e($cat).''; ?>wire:key="gb-<?php echo e($cat); ?>">
+                                            <td><?php echo e($P::GRANT_CATEGORIES[$cat][0] ?? $cat); ?></td>
+                                            <td class="text-end fw-semibold"><?php echo e(number_format((float) $amount)); ?></td>
+                                            <td class="text-end text-muted"><?php echo e($toLsl($amount)); ?></td>
+                                        </tr>
+                                    <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::endLoop(); ?><?php endif; ?><?php endforeach; $__env->popLoop(); $loop = $__env->getLastLoop(); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::closeLoop(); ?><?php endif; ?>
+                                </tbody>
+                                <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if(is_numeric($form['grant_outside_lesotho_usd'] ?? null) && (float) $form['grant_outside_lesotho_usd'] > 0): ?>
+                                    <tfoot><tr><td colspan="3" class="text-muted">Of which spent outside Lesotho: US$ <?php echo e(number_format((float) $form['grant_outside_lesotho_usd'])); ?></td></tr></tfoot>
+                                <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+                            </table>
+                        </div>
+                        <div class="form-text">To change the budget lines, update section 8.4 of your <a href="<?php echo e(route('profile.index')); ?>" target="_blank">enterprise profile</a>.</div>
+                    <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
                 </section>
             <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
 
@@ -536,10 +617,10 @@ unset($__errorArgs, $__bag); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendB
                         </div>
                         <div class="row g-3">
                             <div class="col-md-6">
-                                <label class="form-label" for="investor_amount_lsl">Amount indicated or committed <?php echo $fp('investor_amount_lsl'); ?></label>
+                                <label class="form-label" for="investor_amount_usd">Amount indicated or committed <?php echo $fp('investor_amount_usd'); ?></label>
                                 <div class="input-group has-validation">
-                                    <span class="input-group-text">M</span>
-                                    <input type="number" id="investor_amount_lsl" min="0" step="1000" wire:model.blur="form.investor_amount_lsl" class="form-control <?php $__errorArgs = ['form.investor_amount_lsl'];
+                                    <span class="input-group-text">US$</span>
+                                    <input type="number" id="investor_amount_usd" min="0" step="1000" wire:model.live.debounce.500ms="form.investor_amount_usd" class="form-control <?php $__errorArgs = ['form.investor_amount_usd'];
 $__bag = $errors->getBag($__errorArgs[1] ?? 'default');
 if ($__bag->has($__errorArgs[0])) :
 if (isset($message)) { $__messageOriginal = $message; }
@@ -547,7 +628,7 @@ $message = $__bag->first($__errorArgs[0]); ?> is-invalid <?php unset($message);
 if (isset($__messageOriginal)) { $message = $__messageOriginal; }
 endif;
 unset($__errorArgs, $__bag); ?>">
-                                    <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php $__errorArgs = ['form.investor_amount_lsl'];
+                                    <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php $__errorArgs = ['form.investor_amount_usd'];
 $__bag = $errors->getBag($__errorArgs[1] ?? 'default');
 if ($__bag->has($__errorArgs[0])) :
 if (isset($message)) { $__messageOriginal = $message; }
@@ -557,25 +638,71 @@ endif;
 unset($__errorArgs, $__bag); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
                                 </div>
                                 <div class="form-text">
-                                    <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if(filled($form['investor_amount_lsl'])): ?> ≈ <?php echo e($toUsd($form['investor_amount_lsl'])); ?> <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
-                                    <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if(in_array('investor_amount_lsl', $fromProfile, true)): ?> <span class="d-block">Taken from the investor contribution in your profile.</span> <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+                                    <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if(is_numeric($form['investor_amount_usd'])): ?> ≈ <?php echo e($toLsl($form['investor_amount_usd'])); ?> <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+                                    <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if(in_array('investor_amount_usd', $fromProfile, true)): ?> <span class="d-block">Taken from the investment amount (8.2.7) in your profile.</span> <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
                                     <span class="d-block">Minimum US$ <?php echo e(number_format($P::minInvestorUsd())); ?> (about M <?php echo e(number_format($P::minInvestorLsl())); ?>).</span>
                                 </div>
                             </div>
                             <div class="col-md-6">
-                                <label class="form-label" for="investor_name">Investor name <?php echo $fp('investor_name'); ?></label>
+                                <label class="form-label" for="investor_name">Lead investor name <?php echo $fp('investor_name'); ?></label>
                                 <input type="text" id="investor_name" wire:model="form.investor_name" class="form-control">
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label" for="investor_type">Investor type <?php echo $fp('investor_type'); ?></label>
+                                <select id="investor_type" wire:model="form.investor_type" class="form-select">
+                                    <option value="">Select…</option>
+                                    <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::openLoop(); ?><?php endif; ?><?php $__currentLoopData = array_unique(array_merge($P::LEAD_INVESTOR_TYPES, $P::INVESTOR_TYPES, array_filter([$form['investor_type']]))); $__env->addLoop($__currentLoopData); foreach($__currentLoopData as $t): $__env->incrementLoopIndices(); $loop = $__env->getLastLoop(); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::startLoopIteration(); ?><?php endif; ?>
+                                        <option value="<?php echo e($t); ?>"><?php echo e($t); ?></option>
+                                    <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::endLoop(); ?><?php endif; ?><?php endforeach; $__env->popLoop(); $loop = $__env->getLastLoop(); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::closeLoop(); ?><?php endif; ?>
+                                </select>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label" for="investor_country">Investor country <?php echo $fp('investor_country'); ?></label>
+                                <select id="investor_country" wire:model="form.investor_country" class="form-select">
+                                    <option value="">Select…</option>
+                                    <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::openLoop(); ?><?php endif; ?><?php $__currentLoopData = array_unique(array_merge($P::COUNTRIES, array_filter([$form['investor_country']]))); $__env->addLoop($__currentLoopData); foreach($__currentLoopData as $c): $__env->incrementLoopIndices(); $loop = $__env->getLastLoop(); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::startLoopIteration(); ?><?php endif; ?>
+                                        <option value="<?php echo e($c); ?>"><?php echo e($c); ?></option>
+                                    <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::endLoop(); ?><?php endif; ?><?php endforeach; $__env->popLoop(); $loop = $__env->getLastLoop(); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php \Livewire\Features\SupportCompiledWireKeys\SupportCompiledWireKeys::closeLoop(); ?><?php endif; ?>
+                                </select>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label" for="investor_contact_name">Investor contact person <?php echo $fp('investor_contact_name'); ?></label>
+                                <input type="text" id="investor_contact_name" wire:model="form.investor_contact_name" class="form-control">
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label" for="investor_contact_email">Investor contact email <?php echo $fp('investor_contact_email'); ?></label>
+                                <input type="email" id="investor_contact_email" wire:model="form.investor_contact_email" class="form-control <?php $__errorArgs = ['form.investor_contact_email'];
+$__bag = $errors->getBag($__errorArgs[1] ?? 'default');
+if ($__bag->has($__errorArgs[0])) :
+if (isset($message)) { $__messageOriginal = $message; }
+$message = $__bag->first($__errorArgs[0]); ?> is-invalid <?php unset($message);
+if (isset($__messageOriginal)) { $message = $__messageOriginal; }
+endif;
+unset($__errorArgs, $__bag); ?>">
+                                <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php $__errorArgs = ['form.investor_contact_email'];
+$__bag = $errors->getBag($__errorArgs[1] ?? 'default');
+if ($__bag->has($__errorArgs[0])) :
+if (isset($message)) { $__messageOriginal = $message; }
+$message = $__bag->first($__errorArgs[0]); ?> <div class="invalid-feedback"><?php echo e($message); ?></div> <?php unset($message);
+if (isset($__messageOriginal)) { $message = $__messageOriginal; }
+endif;
+unset($__errorArgs, $__bag); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label" for="expected_close">Expected close / deployment <?php echo $fp('expected_close'); ?></label>
+                                <input type="text" id="expected_close" wire:model="form.expected_close" placeholder='e.g. "March 2027" or "within 3 months"' class="form-control">
                             </div>
                         </div>
                         <?php
-                            $invAmount = is_numeric($form['investor_amount_lsl'] ?? null) ? (float) $form['investor_amount_lsl'] : null;
-                            $cafiGrant = $P::matchingGrant($invAmount);
+                            $invUsd    = is_numeric($form['investor_amount_usd'] ?? null) ? (float) $form['investor_amount_usd'] : null;
+                            $invLsl    = $invUsd !== null ? $invUsd * $rate : null;
+                            $cafiGrant = $P::matchingGrant($invLsl);
                         ?>
                         <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($cafiGrant !== null): ?>
-                            <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($P::meetsInvestorMinimum($invAmount)): ?>
+                            <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($P::meetsInvestorMinimum($invLsl)): ?>
                                 <div class="callout callout-success small mt-3 mb-0">
-                                    <i class="bi bi-calculator me-1"></i> CAFI matching grant (<?php echo e($P::grantRatioLabel()); ?> of the investor amount):
-                                    <strong>M <?php echo e(number_format($cafiGrant)); ?></strong> <span class="text-muted">≈ <?php echo e($toUsd($cafiGrant)); ?></span>
+                                    <i class="bi bi-calculator me-1"></i> Indicative CAFI grant (<?php echo e($P::effectiveGrantPct($invLsl)); ?>% of the investor amount):
+                                    <strong>US$ <?php echo e(number_format($cafiGrant / $rate)); ?></strong> <span class="text-muted">≈ M <?php echo e(number_format($cafiGrant)); ?></span>
                                 </div>
                             <?php else: ?>
                                 <div class="callout callout-danger small mt-3 mb-0">
@@ -710,6 +837,7 @@ unset($__errorArgs, $__bag); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendB
                             'Business name' => $form['business_name'], 'Representative' => $form['representative_name'],
                             'Telephone' => $form['phone'], 'Email' => $form['email'], 'District' => $form['district'],
                             'Website / social' => $form['website'], 'Legal status' => $one($legalStatuses, $form['legal_status']),
+                            'Registration number' => $form['registration_no'],
                             'Operating since' => $form['year_commenced'],
                         ]],
                         2 => ['Operations', [
@@ -718,17 +846,23 @@ unset($__errorArgs, $__bag); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendB
                             'Full-time employees' => $form['full_time_employees'],
                         ]],
                         3 => ['Investment', array_filter([
-                            'Investment required' => $lslUsd($form['investment_required_lsl']),
+                            'Investment required' => $usdLsl($form['investment_required_usd']),
                             'Investment type' => $many($investmentTypes, $form['investment_types']),
                             'Use of funds' => $many($useOfFunds, $form['use_of_funds']),
                             'Other use' => $showUseOther ? ($form['use_of_funds_other'] ?: null) : false,
                             'Planned use' => $form['use_of_funds_description'],
+                            'CAFI grant requested' => $usdLsl($form['grant_requested_usd']),
+                            'Grant budget' => collect($form['grant_budget'] ?? [])->map(fn ($v, $k) => ($P::GRANT_CATEGORIES[$k][0] ?? $k).': US$ '.number_format((float) $v))->implode(' · ') ?: null,
                         ], fn ($v) => $v !== false)],
                         4 => ['Investor', array_filter([
                             'Investor engagement' => $one($investorStatuses, $form['investor_status']),
                             'Other status' => $showStatusOther ? ($form['investor_status_other'] ?: null) : false,
-                            'Investor amount' => $showInvestorBlock ? $lslUsd($form['investor_amount_lsl']) : false,
-                            'Investor name' => $showInvestorBlock ? ($form['investor_name'] ?: null) : false,
+                            'Investor amount' => $showInvestorBlock ? $usdLsl($form['investor_amount_usd']) : false,
+                            'Lead investor' => $showInvestorBlock ? ($form['investor_name'] ?: null) : false,
+                            'Investor type' => $showInvestorBlock ? ($form['investor_type'] ?: null) : false,
+                            'Investor country' => $showInvestorBlock ? ($form['investor_country'] ?: null) : false,
+                            'Investor contact' => $showInvestorBlock ? (trim(($form['investor_contact_name'] ?? '').' '.(filled($form['investor_contact_email'] ?? '') ? '· '.$form['investor_contact_email'] : '')) ?: null) : false,
+                            'Expected close' => $showInvestorBlock ? ($form['expected_close'] ?: null) : false,
                             'Evidence' => $showInvestorBlock ? $many($investorEvidence, $form['investor_evidence']) : false,
                         ], fn ($v) => $v !== false)],
                         5 => ['Support & declaration', [

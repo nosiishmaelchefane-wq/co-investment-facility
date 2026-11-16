@@ -3,12 +3,14 @@
 namespace App\Http\Controllers;
 
 use App\Models\Authorisation;
+use App\Models\AuthorisationDocument;
 use Illuminate\Support\Facades\Storage;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 /**
- * Gate 4 files: the document e-mailed for signing and the signed copy, for the MD and the PS.
- *   Route: GET /gate4/{authorisation}/{file}/download → name "gate4.file"   (file: md_request | md_signed | ps_request | ps_signed)
+ * Gate 5 files.
+ *   GET /gate4/{authorisation}/{file}/download   → "gate4.file"      older single files (md_request | md_signed | ps_request | ps_signed)
+ *   GET /gate5/documents/{document}/download     → "gate4.document"  documents sent to the MD for review / signed by the PS
  *   Allowed: staff who can view the transaction (not the applicant).
  */
 class Gate4FileController extends Controller
@@ -25,5 +27,15 @@ class Gate4FileController extends Controller
         abort_unless($path && Storage::disk(Authorisation::DISK)->exists($path), 404);
 
         return Storage::disk(Authorisation::DISK)->download($path, $authorisation->{"{$file}_name"} ?: basename($path));
+    }
+
+    public function document(AuthorisationDocument $document): StreamedResponse
+    {
+        $eoi  = $document->authorisation?->expressionOfInterest;
+        $user = auth()->user();
+        abort_unless($eoi && $eoi->isViewableBy($user) && $eoi->user_id !== $user->id, 403);
+        abort_unless(Storage::disk(Authorisation::DISK)->exists($document->path), 404);
+
+        return Storage::disk(Authorisation::DISK)->download($document->path, $document->name ?: basename($document->path));
     }
 }

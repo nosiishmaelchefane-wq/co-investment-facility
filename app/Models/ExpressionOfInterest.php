@@ -78,10 +78,12 @@ class ExpressionOfInterest extends Model
     /** Fields the applicant fills in (same keys as the drawer form) */
     public const FORM_FIELDS = [
         'business_name', 'representative_name', 'phone', 'email', 'district', 'website',
-        'legal_status', 'year_commenced',
+        'legal_status', 'registration_no', 'year_commenced',
         'business_description', 'annual_turnover', 'full_time_employees',
         'investment_required_usd', 'investment_types', 'use_of_funds', 'use_of_funds_other', 'use_of_funds_description',
+        'grant_requested_usd', 'grant_outside_lesotho_usd', 'grant_budget',
         'investor_status', 'investor_status_other', 'investor_amount_usd', 'investor_name', 'investor_evidence',
+        'investor_type', 'investor_country', 'investor_contact_name', 'investor_contact_email', 'expected_close',
         'support_need', 'declaration_agree', 'declaration_name', 'declaration_date',
     ];
 
@@ -101,6 +103,9 @@ class ExpressionOfInterest extends Model
         'withdrawn_at'            => 'datetime',
         'investment_required_usd' => 'decimal:2',
         'investor_amount_usd'     => 'decimal:2',
+        'grant_requested_usd'       => 'decimal:2',
+        'grant_outside_lesotho_usd' => 'decimal:2',
+        'grant_budget'              => 'array',
         'year_commenced'          => 'integer',
         'full_time_employees'     => 'integer',
     ];
@@ -233,6 +238,9 @@ class ExpressionOfInterest extends Model
         $data['declaration_date']        = $this->declaration_date?->toDateString();
         $data['investment_required_usd'] = $this->investment_required_usd !== null ? (float) $this->investment_required_usd : null;
         $data['investor_amount_usd']     = $this->investor_amount_usd !== null ? (float) $this->investor_amount_usd : null;
+        $data['grant_requested_usd']       = $this->grant_requested_usd !== null ? (float) $this->grant_requested_usd : null;
+        $data['grant_outside_lesotho_usd'] = $this->grant_outside_lesotho_usd !== null ? (float) $this->grant_outside_lesotho_usd : null;
+        $data['grant_budget']              = (array) ($this->grant_budget ?? []);
 
         return $data + ['id' => $this->id, 'reference' => $this->reference, 'status' => $this->status];
     }

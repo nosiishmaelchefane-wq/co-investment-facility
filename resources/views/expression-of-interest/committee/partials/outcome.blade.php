@@ -54,16 +54,22 @@
 
     <div class="row g-3 mt-1">
         <div class="col-md-4">
-            <label class="form-label small fw-semibold">Private investment (M)</label>
-            <input type="number" min="0" step="1000" class="form-control @error('decision.private_amount') is-invalid @enderror" wire:model.blur="decision.private_amount" @disabled(! $canRecord)>
+            <label class="form-label small fw-semibold">Private investment (US$)</label>
+            <div class="input-group has-validation">
+                <span class="input-group-text">US$</span>
+                <input type="number" min="0" step="1000" class="form-control @error('decision.private_usd') is-invalid @enderror" wire:model.blur="decision.private_usd" @disabled(! $canRecord)>
+                @error('decision.private_usd') <div class="invalid-feedback">{{ $message }}</div> @enderror
+            </div>
             <div class="small text-muted">{{ $u($decision['private_amount']) }} · Gate 2 validated {{ $m($validated['private']) }}</div>
-            @error('decision.private_amount') <div class="invalid-feedback">{{ $message }}</div> @enderror
         </div>
         <div class="col-md-4">
-            <label class="form-label small fw-semibold">Recommended CAFI grant (M) @if (in_array($out, ['approve', 'conditional'], true)) <span class="req">*</span> @endif</label>
-            <input type="number" min="0" step="1000" class="form-control @error('decision.grant_amount') is-invalid @enderror" wire:model.blur="decision.grant_amount" @disabled(! $canRecord)>
+            <label class="form-label small fw-semibold">Recommended CAFI grant (US$) @if (in_array($out, ['approve', 'conditional'], true)) <span class="req">*</span> @endif</label>
+            <div class="input-group has-validation">
+                <span class="input-group-text">US$</span>
+                <input type="number" min="0" step="1000" class="form-control @error('decision.grant_usd') is-invalid @enderror" wire:model.blur="decision.grant_usd" @disabled(! $canRecord)>
+                @error('decision.grant_usd') <div class="invalid-feedback">{{ $message }}</div> @enderror
+            </div>
             <div class="small text-muted">{{ $u($decision['grant_amount']) }} · Gate 2 validated {{ $m($validated['grant']) }}</div>
-            @error('decision.grant_amount') <div class="invalid-feedback">{{ $message }}</div> @enderror
         </div>
         <div class="col-md-4">
             <label class="form-label small fw-semibold">Committee members present</label>
@@ -137,8 +143,8 @@
                         @empty None declared. @endforelse
                     </td></tr>
                     <tr><th>Outcome</th><td><span class="pill {{ $oP }}">{{ $oL }}</span> <span class="small text-muted">· {{ $oN }}</span></td></tr>
-                    <tr><th>Private investment</th><td>{{ $m($review->private_amount) }} <span class="small text-muted">· {{ $u($review->private_amount) }}</span></td></tr>
-                    <tr><th>Proposed CAFI grant</th><td>{{ $m($review->grant_amount) }} <span class="small text-muted">· {{ $u($review->grant_amount) }}</span></td></tr>
+                    <tr><th>Private investment</th><td>{{ $m($review->private_amount) }} <span class="small text-muted">{{ $u($review->private_amount) }}</span></td></tr>
+                    <tr><th>Proposed CAFI grant</th><td>{{ $m($review->grant_amount) }} <span class="small text-muted">{{ $u($review->grant_amount) }}</span></td></tr>
                     <tr><th>Key conditions</th><td>
                         @php $live = collect($review->conditions ?? [])->reject(fn ($c) => ($c['decision'] ?? '') === 'removed'); @endphp
                         @forelse ($live as $c) <div>• {{ $c['finding'] }} <span class="text-muted small">({{ $c['treatment'] }})</span></div> @empty — @endforelse

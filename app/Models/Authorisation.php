@@ -4,20 +4,23 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 /**
  * Gate 5 · Final Authorisation (CI Facility Operations Manual §3.6). One row per round. Amounts in Maloti.
  *
- *   Gate 4 Grant readiness → CAFI Managing Director signs the Grant Agreement → MTIBD Principal Secretary signs → Gate 6
- *   Sequential: the Principal Secretary only acts after the Managing Director has signed. Both signatures = formal approval.
+ *   Gate 4 Grant readiness → CAFI Managing Director reviews → MTIBD Principal Secretary signs (outside the system) → Gate 6
+ *   1. The PMU sends the documents (several files) to the Managing Director for review — the MD does not sign.
+ *   2. The MD is satisfied → the PMU forwards the documents to the Principal Secretary by e-mail (outside the system).
+ *   3. The PS signs; the PMU uploads the signed documents → formally approved.
  *   Inputs: Grant Readiness Memo, Draft Grant Agreement, Investment Committee recommendation and the transaction file.
  *   (Table / permission names keep "gate4" from before Gate 4 Grant readiness was added.)
  */
 class Authorisation extends Model
 {
-    /* ---------------- §3.6.1 Managing Director review and signature ---------------- */
+    /* ---------------- §3.6.1 Managing Director review ---------------- */
 
-    /** check => text — what the Managing Director confirms before signing */
+    /** check => text — what the Managing Director confirms in the review */
     public const MD_CHECKS = [
         'readiness'      => 'Gate 4 is complete: the Grant Readiness Memo recommends Ready to Proceed, approved by the Hub Manager and the PMU Director of Implementation',
         'memo'           => 'The Grant Readiness Memo, Draft Grant Agreement and supporting transaction file have been reviewed',
@@ -29,15 +32,16 @@ class Authorisation extends Model
 
     /** decision => [label, description, icon] */
     public const MD_DECISIONS = [
-        'approve' => ['Sign & forward',                              'Signs the Grant Agreement and forwards it to the MTIBD Principal Secretary.', 'bi-pen'],
-        'return'  => ['Return for clarification or corrective action', 'Material issues — returned before proceeding.',                               'bi-arrow-return-left'],
-        'decline' => ['Not approve',                                 'The Managing Director does not sign — the grant cannot proceed.',              'bi-x-octagon'],
+        'approve' => ['Satisfied — forward to the PS',                'The documents are forwarded to the MTIBD Principal Secretary by e-mail for signature.', 'bi-forward'],
+        'return'  => ['Return for clarification or corrective action', 'Material issues — returned before proceeding.',                                        'bi-arrow-return-left'],
+        'decline' => ['Not approve',                                 'The Managing Director is not satisfied — the grant cannot proceed.',                     'bi-x-octagon'],
     ];
 
-    /* ---------------- §3.6.2 Principal Secretary review and signature ---------------- */
+    /* ---------------- §3.6.2 Principal Secretary signature (outside the system) ---------------- */
 
+    /** New rounds only record 'authorise' (the PMU uploads the signed documents). 'clarify' / 'decline' remain for older rounds. */
     public const PS_DECISIONS = [
-        'authorise' => ['Sign — formally approve',                       'Both signatures complete: the grant is formally approved → Gate 6.', 'bi-patch-check'],
+        'authorise' => ['Signed — formally approved',                       'Both signatures complete: the grant is formally approved → Gate 6.', 'bi-patch-check'],
         'clarify'   => ['Return for clarification or corrective action', 'Material issues to resolve before formal approval.',                 'bi-arrow-return-left'],
         'decline'   => ['Not approve',                                   'The Principal Secretary does not sign — the grant cannot proceed.',  'bi-x-octagon'],
     ];
@@ -50,9 +54,9 @@ class Authorisation extends Model
 
     /** outcome => [label, meaning, next step, icon, pill] */
     public const OUTCOMES = [
-        self::OUTCOME_AUTHORISED     => ['Formally approved',                              'The CAFI Managing Director and the MTIBD Principal Secretary have both signed the Grant Agreement.', 'Proceed to Gate 6 · Conditions precedent & onboarding', 'bi-patch-check',       'pill-ok'],
-        self::OUTCOME_CLARIFICATION  => ['Returned for clarification or corrective action', 'A signatory identified issues that must be resolved before the agreement can proceed.',          'Resolve and resubmit to the signatory',                 'bi-arrow-return-left', 'pill-warn'],
-        self::OUTCOME_NOT_AUTHORISED => ['Not approved',                                   'The grant did not receive the required signatures and cannot proceed.',                           'Process ends — the applicant is notified',              'bi-x-octagon',         'pill-danger'],
+        self::OUTCOME_AUTHORISED     => ['Formally approved',                              'Reviewed by the CAFI Managing Director and signed by the MTIBD Principal Secretary.', 'Proceed to Gate 6 · Conditions precedent & onboarding', 'bi-patch-check',       'pill-ok'],
+        self::OUTCOME_CLARIFICATION  => ['Returned for clarification or corrective action', 'The Managing Director identified issues that must be resolved before the documents can proceed.',          'Resolve and resubmit to the signatory',                 'bi-arrow-return-left', 'pill-warn'],
+        self::OUTCOME_NOT_AUTHORISED => ['Not approved',                                   'The grant was not approved and cannot proceed.',                           'Process ends — the applicant is notified',              'bi-x-octagon',         'pill-danger'],
     ];
 
     public const OUTCOME_TO_EOI_STATUS = [
@@ -78,14 +82,18 @@ class Authorisation extends Model
 
     /* ---------------- Signing outside the system ---------------- */
 
-    /** The MD and PS do not log in — the PMU sends them the Grant Agreement itself (no e-mail from the system), uploads the signed copy and records the decision. */
+    /** The MD and PS do not log in — the PMU sends them the documents itself (no e-mail from the system) and records the outcome. */
     public const DISK = 'local';
 
+    /** Per file */
     public const MAX_KB = 20480;
 
-    /** Accepted files: what is sent for signing, and the signed copy (scans / photos allowed) */
-    public const REQUEST_MIMES = 'pdf,docx,doc';
-    public const SIGNED_MIMES  = 'pdf,jpg,jpeg,png';
+    /** Most files per step */
+    public const MAX_FILES = 15;
+
+    /** Accepted files: documents sent to the MD for review, and the documents signed by the PS (scans / photos allowed) */
+    public const REQUEST_MIMES = 'pdf,docx,doc,xlsx,xls,pptx,jpg,jpeg,png';
+    public const SIGNED_MIMES  = 'pdf,jpg,jpeg,png,docx,doc';
 
     /** role => [authority title, short label] */
     public const AUTHORITIES = [
@@ -143,6 +151,22 @@ class Authorisation extends Model
         return $this->belongsTo(User::class, 'ps_by');
     }
 
+    /** All documents of this round (sent to the MD, signed by the PS) */
+    public function documents(): HasMany
+    {
+        return $this->hasMany(AuthorisationDocument::class)->orderBy('id');
+    }
+
+    public function mdDocuments(): HasMany
+    {
+        return $this->documents()->where('kind', AuthorisationDocument::KIND_MD_SENT);
+    }
+
+    public function psSignedDocuments(): HasMany
+    {
+        return $this->documents()->where('kind', AuthorisationDocument::KIND_PS_SIGNED);
+    }
+
     public function mdSender(): BelongsTo
     {
         return $this->belongsTo(User::class, 'md_sent_by');
@@ -153,15 +177,21 @@ class Authorisation extends Model
         return $this->belongsTo(User::class, 'ps_sent_by');
     }
 
-    /* ---------------- Signing ---------------- */
+    /* ---------------- Documents ---------------- */
 
+    /** md: sent to the Managing Director for review · ps: forwarded to the Principal Secretary (older rounds) */
     public function sentForSigning(string $role): bool
     {
         return $this->{"{$role}_sent_at"} !== null;
     }
 
+    /** ps: at least one signed document uploaded · md: older rounds where the MD signed */
     public function hasSignedCopy(string $role): bool
     {
+        if ($role === 'ps' && $this->psSignedDocuments()->exists()) {
+            return true;
+        }
+
         return filled($this->{"{$role}_signed_path"});
     }
 
@@ -175,6 +205,9 @@ class Authorisation extends Model
     protected static function booted(): void
     {
         static::deleting(function (Authorisation $a) {
+            // Each row removes its own file (unless another round shares it)
+            $a->documents()->get()->each->delete();
+
             foreach (['md', 'ps'] as $r) {
                 foreach (["{$r}_request_path", "{$r}_signed_path"] as $col) {
                     if ($a->{$col}) {
@@ -270,7 +303,7 @@ class Authorisation extends Model
             self::OUTCOME_AUTHORISED     => 'Gate 6 · Conditions precedent & onboarding',
             self::OUTCOME_CLARIFICATION  => $this->heldBy() === 'ps' ? 'Resubmit to the Principal Secretary' : 'Resubmit to the Managing Director',
             self::OUTCOME_NOT_AUTHORISED => 'Process ends',
-            default                      => $this->stage() === 'ps' ? 'Principal Secretary signature' : 'Managing Director signature',
+            default                      => $this->stage() === 'ps' ? 'Principal Secretary signature (by e-mail)' : 'Managing Director review',
         };
     }
 }

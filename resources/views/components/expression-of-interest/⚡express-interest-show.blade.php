@@ -12,6 +12,7 @@ use Livewire\Component;
 |   Page:  @livewire('expression-of-interest.express-interest-show', ['id' => $id])
 |   Who:   the applicant who owns the EOI, or staff with `eoi.view-all`
 |   Tabs:  overview (real data) + Investments (reviewers) + G1–G5 (gate components)
+|   Money: amounts are stored in US$ and shown in US$ first, with the Maloti equivalent underneath.
 */
 new class extends Component
 {
@@ -97,15 +98,25 @@ new class extends Component
     $eoi     = $this->eoi;
     $isOwner = $this->isOwner;
 
+    /* ---------- Money: stored in US$, shown in US$ with Maloti underneath ---------- */
+    $rate      = max((float) config('cif.usd_to_lsl', 18.00), 0.0001);
+    $usd       = fn ($amount) => 'US$ '.number_format((float) $amount);
+    $lsl       = fn ($usdAmount) => 'M '.number_format((float) $usdAmount * $rate);
+    $bandUsd   = fn (int $maloti) => 'US$ '.number_format(round($maloti / $rate / 1000) * 1000);
+
     /* ---------- Labels (same keys as the apply form) ---------- */
     $labels = [
         'legal_status' => [
             'registered_operating' => 'Registered and operating in Lesotho', 'registered_not_operating' => 'Registered, operations not yet established',
             'registration_in_progress' => 'Registration in progress', 'not_registered' => 'Not registered',
         ],
+        // Bands are stored in Maloti; US$ is shown first
         'annual_turnover' => [
-            'below_500k' => 'Below M500,000', '500k_2m' => 'M500,000 – M2 million', '2m_5m' => 'M2 – M5 million',
-            '5m_10m' => 'M5 – M10 million', 'above_10m' => 'Above M10 million',
+            'below_500k' => 'Below '.$bandUsd(500000).' (M500,000)',
+            '500k_2m'    => $bandUsd(500000).' – '.$bandUsd(2000000).' (M500,000 – M2 million)',
+            '2m_5m'      => $bandUsd(2000000).' – '.$bandUsd(5000000).' (M2 – M5 million)',
+            '5m_10m'     => $bandUsd(5000000).' – '.$bandUsd(10000000).' (M5 – M10 million)',
+            'above_10m'  => 'Above '.$bandUsd(10000000).' (M10 million)',
         ],
         'investment_types' => ['equity' => 'Equity', 'quasi_equity' => 'Quasi-equity', 'debt' => 'Debt'],
         'use_of_funds' => [
@@ -168,10 +179,6 @@ new class extends Component
         default                     => 0,
     };
 
-    /* ---------- Money: stored in US$, shown in Maloti with US$ underneath ---------- */
-    $rate      = (float) config('cif.usd_to_lsl', 18.00);
-    $lsl       = fn ($usd) => 'M '.number_format((float) $usd * $rate);
-    $usd       = fn ($amount) => 'US$ '.number_format((float) $amount);
     $required  = (float) ($eoi->investment_required_usd ?? 0);
     $committed = (float) ($eoi->investor_amount_usd ?? 0);
     $coverage  = $required > 0 ? min(100, round($committed / $required * 100)) : 0;
@@ -355,7 +362,7 @@ new class extends Component
          OVERVIEW
          ====================================================================== --}}
 
-    {{-- KPIs (Maloti, with US$ underneath) --}}
+    {{-- KPIs (US$, with Maloti underneath) --}}
     <div class="row g-3 mb-4">
         <div class="col-sm-6 col-xl-3">
             <div class="stat-card">
@@ -363,8 +370,8 @@ new class extends Component
                 <div>
                     <div class="stat-label">Investment required</div>
                     @if ($required)
-                        <div class="stat-value sm">{{ $lsl($required) }}</div>
-                        <div class="small text-muted">≈ {{ $usd($required) }}</div>
+                        <div class="stat-value sm">{{ $usd($required) }}</div>
+                        <div class="small text-muted">≈ {{ $lsl($required) }}</div>
                     @else
                         <div class="stat-value sm">—</div>
                     @endif
@@ -377,8 +384,8 @@ new class extends Component
                 <div>
                     <div class="stat-label">Investor commitment</div>
                     @if ($committed)
-                        <div class="stat-value sm">{{ $lsl($committed) }}</div>
-                        <div class="small text-muted">≈ {{ $usd($committed) }}</div>
+                        <div class="stat-value sm">{{ $usd($committed) }}</div>
+                        <div class="small text-muted">≈ {{ $lsl($committed) }}</div>
                     @else
                         <div class="stat-value sm">—</div>
                     @endif
@@ -391,8 +398,8 @@ new class extends Component
                 <div>
                     <div class="stat-label">Funding gap</div>
                     @if ($required)
-                        <div class="stat-value sm">{{ $lsl($gap) }}</div>
-                        <div class="small text-muted">≈ {{ $usd($gap) }}</div>
+                        <div class="stat-value sm">{{ $usd($gap) }}</div>
+                        <div class="small text-muted">≈ {{ $lsl($gap) }}</div>
                     @else
                         <div class="stat-value sm">—</div>
                     @endif
@@ -479,8 +486,8 @@ new class extends Component
                     <div><dt>Total investment required</dt>
                         <dd>
                             @if ($required)
-                                <span class="d-block fs-5 fw-bold text-brand">{{ $lsl($required) }}</span>
-                                <span class="small text-muted">≈ {{ $usd($required) }}</span>
+                                <span class="d-block fs-5 fw-bold text-brand">{{ $usd($required) }}</span>
+                                <span class="small text-muted">≈ {{ $lsl($required) }}</span>
                             @else — @endif
                         </dd>
                     </div>
@@ -537,7 +544,7 @@ new class extends Component
                     <div><dt>Status</dt><dd>{{ $label('investor_status', $eoi->investor_status) }}{{ $eoi->investor_status === 'other' && $eoi->investor_status_other ? ': '.$eoi->investor_status_other : '' }}</dd></div>
                     <div><dt>Investor</dt><dd>{{ $eoi->investor_name ?: '—' }}</dd></div>
                     <div><dt>Amount indicated / committed</dt>
-                        <dd>@if ($committed) {{ $lsl($committed) }} <span class="small text-muted">(≈ {{ $usd($committed) }})</span> @else — @endif</dd>
+                        <dd>@if ($committed) {{ $usd($committed) }} <span class="small text-muted">(≈ {{ $lsl($committed) }})</span> @else — @endif</dd>
                     </div>
                     <div><dt>Evidence</dt>
                         <dd class="d-flex flex-wrap gap-1">
@@ -558,8 +565,8 @@ new class extends Component
                             <div class="progress-bar bg-accent" style="width: {{ $coverage }}%;"></div>
                         </div>
                         <div class="d-flex justify-content-between flex-wrap gap-2 small text-muted mt-1">
-                            <span>Investor: {{ $lsl($committed) }} (≈ {{ $usd($committed) }})</span>
-                            <span>Gap: {{ $lsl($gap) }} (≈ {{ $usd($gap) }})</span>
+                            <span>Investor: {{ $usd($committed) }} (≈ {{ $lsl($committed) }})</span>
+                            <span>Gap: {{ $usd($gap) }} (≈ {{ $lsl($gap) }})</span>
                         </div>
                     </div>
                 @endif

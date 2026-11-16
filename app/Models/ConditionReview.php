@@ -308,7 +308,7 @@ class ConditionReview extends Model
     /** Most grant that may have been released once this much private capital is verified */
     public static function grantAllowedFor(float $verifiedCapital): float
     {
-        return round($verifiedCapital * EnterpriseProfile::grantRatio(), 2);
+        return (float) (EnterpriseProfile::matchingGrant($verifiedCapital) ?? 0);
     }
 
     /** Minimum verified capital for the grant released up to and including tranche $index */
@@ -316,7 +316,7 @@ class ConditionReview extends Model
     {
         $released = array_sum(array_map(fn ($a) => is_numeric($a) ? (float) $a : 0, array_slice(array_values($amounts), 0, $index + 1)));
 
-        return round($released / max(EnterpriseProfile::grantRatio(), 0.0001), 2);
+        return (float) (EnterpriseProfile::investorNeededFor($released) ?? $released);
     }
 
     public function trancheMinimums(): array
@@ -333,7 +333,8 @@ class ConditionReview extends Model
     }
 
     /**
-     * Matching calculation for a tranche (§3.8.3): grant released before + this tranche ≤ ratio × verified private capital.
+     * Matching calculation for a tranche (§3.8.3): grant released before + this tranche ≤ the grant the verified private
+     * capital supports under the grant rule (50% of the first US$ 300k + 33% above, up to US$ 350k).
      * ['verified', 'allowed', 'released_before', 'after', 'ok', 'linked' (verified capital tied to this tranche), 'needed']
      */
     public function matchingFor(DisbursementTranche $t): array
@@ -350,7 +351,7 @@ class ConditionReview extends Model
             'after'           => $after,
             'ok'              => $after <= $allowed + 0.01,
             'linked'          => (float) $this->deployments->where('status', 'verified')->where('disbursement_tranche_id', $t->id)->sum('amount'),
-            'needed'          => round($after / max(EnterpriseProfile::grantRatio(), 0.0001), 2),
+            'needed'          => (float) (EnterpriseProfile::investorNeededFor($after) ?? $after),
         ];
     }
 
@@ -541,19 +542,23 @@ class ConditionReview extends Model
             ]);
         }
 
-        // Agreements: the executed Grant Agreement is the Gate 5 copy signed by the Principal Secretary
+        // Agreements: the executed Grant Agreement is the Gate 5 document signed by the Principal Secretary
+        //   (several signed documents → the first one; the others stay on the Gate 5 record)
         $investors = $profile?->investor_name ?: $eoi->investor_name;
         $grant = $review->agreements()->create([
             'kind' => 'grant', 'title' => 'CAFI Grant Agreement', 'parties' => 'CAFI · MTIBD · '.($eoi->business_name ?: 'Enterprise'), 'required' => true,
         ]);
-        if ($auth?->ps_signed_path && Storage::disk(Authorisation::DISK)->exists($auth->ps_signed_path)) {
-            $copy = "gate5/{$review->id}/agreements/".Str::random(8).'-'.basename($auth->ps_signed_path);
-            Storage::disk(self::DISK)->put($copy, Storage::disk(Authorisation::DISK)->get($auth->ps_signed_path));
+        $signed     = $auth?->psSignedDocuments()->first();
+        $signedPath = $signed?->path ?? $auth?->ps_signed_path;
+        $signedName = $signed?->name ?? $auth?->ps_signed_name;
+        if ($signedPath && Storage::disk(Authorisation::DISK)->exists($signedPath)) {
+            $copy = "gate5/{$review->id}/agreements/".Str::random(8).'-'.basename($signedPath);
+            Storage::disk(self::DISK)->put($copy, Storage::disk(Authorisation::DISK)->get($signedPath));
             $grant->update([
                 'status'    => 'executed',
                 'signed_on' => $auth->ps_on ?? $auth->ps_decided_at,
                 'file_path' => $copy,
-                'file_name' => 'Executed Grant Agreement - '.($auth->ps_signed_name ?: basename($auth->ps_signed_path)),
+                'file_name' => 'Executed Grant Agreement - '.($signedName ?: basename($signedPath)),
             ]);
         }
         $review->agreements()->create([

@@ -66,7 +66,28 @@
                             @else
                                 <span class="pill pill-muted">Not started</span>
                             @endif
+                            @if ($c?->edited_at)
+                                <span class="pill pill-muted" title="Changed by the Committee secretary"><i class="bi bi-pencil-square"></i> Edited by {{ $c->editor?->name ?? 'the secretary' }}</span>
+                            @endif
                         </div>
+
+                        {{-- Committee secretary only: correct this member's scorecard, or reopen it for them --}}
+                        @if ($canRecord)
+                            <div class="d-flex flex-wrap gap-2 mt-3 pt-2 border-top">
+                                <button type="button" class="btn btn-sm {{ $this->editingMemberId === $member->id ? 'btn-brand' : 'btn-outline-secondary' }}"
+                                        wire:click="editMemberCard({{ $member->id }})" wire:loading.attr="disabled" wire:target="editMemberCard({{ $member->id }})"
+                                        title="Correct the information this member entered">
+                                    <i class="bi bi-pencil-square me-1"></i> {{ $this->editingMemberId === $member->id ? 'Editing…' : 'Edit' }}
+                                </button>
+                                @if ($c?->isSubmitted())
+                                    <button type="button" class="btn btn-sm btn-outline-warning" wire:click="reopenMemberCard({{ $member->id }})"
+                                            wire:confirm="Reopen {{ $member->name }}'s scorecard? It goes back to draft so they can change it and submit it again."
+                                            title="Send it back to the member to change and resubmit">
+                                        <i class="bi bi-arrow-counterclockwise me-1"></i> Reopen
+                                    </button>
+                                @endif
+                            </div>
+                        @endif
                     </div>
                 </div>
             @endforeach

@@ -9,9 +9,9 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 /**
  * Enterprise profile — follows the CAFI Co-Investment Facility Application Form, grouped into 5 sections.
- * Money in Maloti (LSL).
- *   1 Company & contact      (form §1 Company profile, §4 Applicant contact)
- *   2 Legal status & markets (form §2 Legal status, §3 The market)
+ * Money is stored in Maloti (LSL); on the profile screen US$ is the main currency (entered in US$, Maloti shown underneath).
+ *   1 Company & contact      (form v2 §1 Company profile 1.1–1.14, in order, + §4 Applicant contact)
+ *   2 Legal status & markets (form v2 §2 Company legal status 2.1–2.8, incl. the shareholders table + current markets)
  *   3 Employees & key people (form §5 Employees + E&S checklist, §6 Key individuals)
  *   4 Business & financials  (form §7 Business description, §8 Financials)
  *   5 Attachments & declaration (form §9 Attachments)
@@ -23,10 +23,10 @@ class EnterpriseProfile extends Model
 
     /** key => [title, icon, description] */
     public const SECTIONS = [
-        'company'     => ['Company & contact',         'bi-building',     'Company details, business model, shareholders and who we should contact'],
-        'legal'       => ['Legal status & markets',    'bi-bank',         'Is the company registered with OBFC in Lesotho (or in another country), and which markets do you sell in?'],
+        'company'     => ['Company & contact',         'bi-building',     'Company profile: name, OBFC registration, stage, address, sector, summary, earlier CAFI support — and who we should contact'],
+        'legal'       => ['Legal status & markets',    'bi-bank',         'Legal form, registration in another country, shareholders, foreign ownership, operations, tax file and markets'],
         'people'      => ['Employees & key people',    'bi-people',       'Staff numbers, environmental & social checklist and the people running the company'],
-        'business'    => ['Business & financials',     'bi-graph-up',     'What you do, your stage, the investment round and funding to date'],
+        'business'    => ['Business & financials',     'bi-graph-up',     'Customers and competition, revenue, the investment round and funding to date'],
         'attachments' => ['Attachments & declaration', 'bi-folder2-open', 'Supporting documents and your declaration'],
     ];
 
@@ -36,19 +36,28 @@ class EnterpriseProfile extends Model
      */
     public const FIELDS = [
         'company' => [
-            'registered_name' => true, 'short_name' => false, 'month_commenced' => true, 'year_established' => true, 'year_registered' => true, 'website' => false,
-            'address' => true, 'city' => true, 'district' => true, 'sector' => true, 'sector_other' => true, 'sub_sector' => true, 'business_models' => true,
+            // Form v2 §1 Company profile, in order: 1.1–1.14
+            'registered_name' => true, 'short_name' => false, 'month_commenced' => true, 'year_established' => true,
+            'obfc_status' => true, 'year_registered' => true, 'registration_no' => false,
+            'company_stage' => true,
+            'address' => true, 'city' => true, 'district' => true,
+            'sector' => true, 'sector_other' => true, 'sub_sector' => true,
+            'activity' => true, 'products_services' => false,
+            'prior_cafi_support' => true, 'prior_support_details' => true,
+            // Additional company information
+            'website' => false, 'business_models' => true,
             'women_owned_managed' => true, 'youth_owned_managed' => true,
             'basotho_owned_pct' => false, 'women_owned_pct' => false, 'youth_owned_pct' => false,
-            'shareholder_list' => true,        // the table OR the uploaded list (see isAnswered)
-            'prior_cafi_support' => true, 'prior_support_details' => true,
+            // Form v2 §4 Applicant contact information
             'contact_name' => true, 'contact_title' => true, 'contact_phone' => true, 'contact_email' => true,
             'authorised_rep' => true, 'alternative_contact' => false,
             'secondary_name' => true, 'secondary_title' => true, 'secondary_email' => true, 'secondary_phone' => true,
         ],
         'legal' => [
-            'obfc_status' => true, 'legal_form' => true, 'registration_no' => true,
+            // Form v2 §2 Company legal status: 2.1–2.8
+            'legal_form' => true,
             'foreign_registered' => true, 'foreign_country' => true, 'foreign_registration_no' => true,
+            'shareholder_list' => true,        // 2.4 — the table OR the uploaded list (see isAnswered)
             'foreign_owned' => true, 'foreign_owned_pct' => true, 'primary_ops_lesotho' => true, 'rsl_tax_file' => true,
             'markets' => true,
         ],
@@ -63,15 +72,25 @@ class EnterpriseProfile extends Model
         ],
         'business' => [
             // Investor questions are only required when the applicant has an investor (see requiredFields)
-            'activity' => true, 'company_stage' => true, 'products_services' => true, 'customers' => true,
+            // Company summary, stage and products/services moved to Company profile (form v2 §1.7, 1.10, 1.11)
+            'customers' => true,
             'usp' => false, 'marketing_strategy' => false, 'competition' => false,
             'annual_revenue' => true,
+            // Form v2 8.2 Investor information — one lead investor
             'has_investor' => true,
-            'round_amount' => true, 'round_investors' => true, 'participation' => true, 'investor_type' => false,
-            'transaction_status' => false, 'project_cost' => true, 'investment_purpose' => false,
-            'grant_budget' => true,
-            'grant_outside_lesotho' => true, 'grant_outside_justification' => true,
-            'bank_name' => true, 'bank_branch' => false, 'bank_account_name' => true, 'bank_account_number' => true, 'bank_account_type' => false,
+            'lead_investor_name' => true, 'lead_investor_contact_name' => true, 'lead_investor_email' => true, 'lead_investor_phone' => false,
+            'lead_investor_website' => false, 'investor_type' => true, 'lead_investor_country' => true,
+            'investment_currency' => false, 'lead_investor_amount' => true,   // amounts in US$ (8.2.7 / 8.3.5)
+            'transaction_status' => true, 'investor_commitment' => true,      // 8.2.8 / 8.2.9
+            // Form v2 8.3 Transaction information
+            'participation' => true, 'tx_amount_agreed' => true, 'tx_amount' => false /* = 8.2.7 once agreed */, 'tx_terms_agreed' => true,
+            'valuation' => false, 'valuation_by' => false, 'valuation_method' => false,
+            'expected_close' => true, 'tx_conditions_outstanding' => true, 'tx_description' => true,
+            'project_cost' => true,
+            // Form v2 8.4 Proposed use of the CAFI grant (grant only — no private investment), US$
+            'grant_plan' => true, 'grant_outside_justification' => true,
+            'grant_lesotho_70' => true, 'double_financing' => true, 'double_financing_details' => true, 'grant_growth_support' => true,
+            // Bank account for the grant: entered by the applicant at Gate 4 (Grant readiness), not on the profile
             'investment_history' => false,
         ],
         'attachments' => [
@@ -81,7 +100,7 @@ class EnterpriseProfile extends Model
 
     /** Short question labels (used to list what is still unanswered) */
     public const LABELS = [
-        'registered_name' => 'Company official name', 'short_name' => 'Short name', 'year_established' => 'Year of establishment',
+        'registered_name' => 'Company official name', 'short_name' => 'Trading name', 'year_established' => 'Year of establishment',
         'year_registered' => 'Year of registration', 'month_commenced' => 'Month operations commenced', 'sub_sector' => 'Sub-sector',
         'authorised_rep' => 'Authorised representative', 'alternative_contact' => 'Alternative contact details',
         'secondary_name' => 'Secondary contact name', 'secondary_title' => 'Secondary contact title',
@@ -95,7 +114,7 @@ class EnterpriseProfile extends Model
         'website' => 'Website', 'address' => 'Address', 'city' => 'City / town', 'district' => 'District', 'sector' => 'Sector',
         'sector_other' => 'Other sector', 'business_models' => 'Business model', 'shareholder_list' => 'Shareholders', 'women_owned_managed' => 'Women owned / managed', 'youth_owned_managed' => 'Youth owned / managed',
         'basotho_owned_pct' => '% shares held by Basotho', 'women_owned_pct' => '% shares held by women', 'youth_owned_pct' => '% shares held by youth',
-        'prior_cafi_support' => 'Prior CAFI support', 'prior_support_details' => 'Support received',
+        'prior_cafi_support' => 'Support from a CAFI-funded programme', 'prior_support_details' => 'Support received',
         'contact_name' => 'Contact name', 'contact_title' => 'Contact title', 'contact_phone' => 'Contact phone', 'contact_email' => 'Contact e-mail',
         'obfc_registered' => 'Registered at OBFC', 'legal_form' => 'Type of registration', 'registration_no' => 'Registration number',
         'foreign_registered' => 'Registered in another country', 'foreign_country' => 'Country of registration', 'markets' => 'Current markets',
@@ -103,11 +122,19 @@ class EnterpriseProfile extends Model
         'ft_male' => 'Full-time males', 'ft_female' => 'Full-time females', 'pt_male' => 'Part-time males', 'pt_female' => 'Part-time females',
         'es_checklist' => 'ESG checklist', 'es_notes' => 'ESG checklist explanations', 'es_records_system' => 'Financial records system',
         'es_confirmed' => 'ESG checklist confirmation', 'management' => 'Management summary',
-        'activity' => 'Company summary', 'company_stage' => 'Stage of development',
+        'activity' => 'Company summary', 'company_stage' => 'Business lifecycle stage',
         'products_services' => 'Products & services', 'customers' => 'Customers', 'has_investor' => 'Do you have an investor?',
         'usp' => 'Unique selling proposition', 'marketing_strategy' => 'Marketing approach', 'competition' => 'Competition',
         'annual_revenue' => 'Annual revenue', 'round_amount' => 'Current investment round', 'round_investors' => 'Participating investors',
-        'participation' => 'Financing type', 'investor_type' => 'Lead investor type', 'transaction_status' => 'Status of the deal',
+        'lead_investor_name' => 'Lead investor name', 'lead_investor_contact_name' => 'Lead investor contact name', 'lead_investor_email' => 'Lead investor e-mail',
+        'lead_investor_phone' => 'Lead investor telephone', 'lead_investor_website' => 'Investor website', 'lead_investor_country' => 'Investor country',
+        'investment_currency' => 'Currency', 'lead_investor_amount' => 'Investment amount from the investor', 'investor_commitment' => 'Investor commitment',
+        'tx_amount_agreed' => 'Investment amount agreed', 'tx_amount' => 'Agreed investment amount', 'tx_terms_agreed' => 'Principal terms agreed',
+        'valuation' => 'Valuation', 'valuation_by' => 'Who developed the valuation', 'valuation_method' => 'Valuation method',
+        'expected_close' => 'Expected close / deployment', 'tx_conditions_outstanding' => 'Material conditions outstanding', 'tx_description' => 'Transaction description',
+        'grant_plan' => 'Proposed grant utilisation budget', 'grant_lesotho_70' => 'At least 70% spent in Lesotho',
+        'double_financing' => 'Financed by another grant', 'double_financing_details' => 'Other funding details', 'grant_growth_support' => 'How the grant supports the growth plan',
+        'participation' => 'Investment instrument', 'investor_type' => 'Investor type', 'transaction_status' => 'Investor engagement status',
         'project_cost' => 'Total project cost', 'grant_requested' => 'CAFI matching grant', 'investment_purpose' => 'What the money is for',
         'investment_history' => 'Investment to date', 'grant_budget' => 'Grant utilisation budget',
         'grant_outside_lesotho' => 'Grant spent outside Lesotho', 'grant_outside_justification' => 'Why grant money is spent outside Lesotho',
@@ -129,8 +156,8 @@ class EnterpriseProfile extends Model
 
         // 1 · Company & contact
         'registered_name'       => 'The company name exactly as it appears on your registration certificate.',
-        'short_name'            => 'The name customers know you by, if different from the registered name (e.g. a trading name or abbreviation).',
-        'year_established'      => 'The month and year the business started operating — not necessarily when it was registered. Enterprises operating for less than 6 months are flagged for review.',
+        'short_name'            => 'The name you trade under, if it is different from the official registered name.',
+        'year_established'      => 'When the business started operating — not necessarily when it was registered. Enterprises operating for less than 6 months are flagged for review.',
         'month_commenced'       => 'The month the business started operating.',
         'sub_sector'            => 'A more specific description within your sector, e.g. "Fruit and vegetable processing" within Agro-processing.',
         'authorised_rep'        => 'The person legally allowed to sign for the company (usually a director), with their position, e.g. "Palesa M., Managing Director".',
@@ -145,7 +172,7 @@ class EnterpriseProfile extends Model
         'expected_jobs'         => 'How many additional jobs you expect the investment to create over the next 24 months. These figures become the baseline for the quarterly and close-out reports.',
         'key_people'            => 'The directors and key managers: name, position, years of service with the company and nationality.',
         'ownership_dispute'     => 'Any known dispute over who owns the company, any material court case, or any conflict that could affect this investment.',
-        'year_registered'       => 'The year the company was registered with the OBFC (shown on your registration certificate). Required once you have said the company is OBFC-registered.',
+        'year_registered'       => 'The year the company was registered with the OBFC (shown on your registration certificate).',
         'website'               => 'Your website or main social media page, if you have one. Include https://',
         'address'               => 'The physical address where the business operates (plot number, street, village or area). A P.O. Box alone is not enough.',
         'city'                  => 'The town or city of your main place of business.',
@@ -160,7 +187,7 @@ class EnterpriseProfile extends Model
         'basotho_owned_pct'     => 'The percentage of the company\'s shares held by Lesotho citizens (0–100).',
         'women_owned_pct'       => 'The percentage of the company\'s shares held by women (0–100). A shareholder can count in more than one group.',
         'youth_owned_pct'       => 'The percentage of the company\'s shares held by people aged 35 or under (0–100).',
-        'prior_cafi_support'    => 'Tick every CAFI-funded project you have received a grant from before. Choose "None" if you have not received any.',
+        'prior_cafi_support'    => 'Whether the enterprise has been supported before by a CAFI-funded programme — the Incubation Hub, LEAP or the Horticulture Center. If yes, tick each one and explain the support.',
         'prior_support_details' => 'Which project supported you, roughly when, how much you received and what it was used for.',
         'contact'               => 'The person LEHSFF/CAFI should contact about this application. They should be able to answer questions about the business and the investment.',
         'contact_name'          => 'Full name of the contact person.',
@@ -198,14 +225,14 @@ class EnterpriseProfile extends Model
         'usp'                   => 'Your unique selling proposition: the main reason customers choose you over alternatives — e.g. price, quality, local sourcing, speed, technology, a patent or an exclusive contract. Be specific.',
         'marketing_strategy'    => 'How you find and keep customers: sales channels (shops, distributors, online, direct), pricing, promotion and partnerships — and what will change with the new investment.',
         'competition'           => 'Who else sells the same or similar products to your customers (local and imported), their rough market share or prices, and how you compare.',
-        'annual_revenue'        => 'Total sales for the last full financial year, in Maloti, before costs. Use the figure from your financial statements.',
+        'annual_revenue'        => 'Total sales for the last full financial year, before costs, in US dollars (the Maloti equivalent is shown underneath). Use the figure from your financial statements.',
         'round_amount'          => 'The total amount you are raising in the current investment round, in Maloti (all investors together).',
         'round_investors'       => 'Each investor taking part in this round and the amount (ticket size) they have committed, in Maloti. At least one investor with a ticket size is required. For each investor give their national ID or passport number (or, for a company or fund, its registration number) so reviewers can verify them. The CAFI grant is calculated from these amounts.',
         'participation'         => 'How the investor is putting money in: shares (Equity), a loan that converts to shares (Convertible Note / SAFE), a share of future revenue, or other.',
         'investor_type'         => 'The kind of organisation leading the round, e.g. angel investor, venture capital fund, development finance institution.',
         'transaction_status'    => 'How far the deal with your investor has gone: still talking, letter of intent (LOI) received, term sheet signed, or investment agreement signed.',
-        'grant_requested'       => 'The CAFI matching grant is a non-repayable grant from the CAFI project. It is a fixed share of what your private investor(s) put in, so you do not type it — it is calculated from the investor amounts above. It is paid in tranches once the conditions in the Grant Agreement are met, and may only be spent on the items in your grant utilisation budget.',
-        'project_cost'          => 'The total cost of the project the investment and grant will pay for, in Maloti, including your own contribution. It cannot be less than the CAFI matching grant.',
+        'grant_requested'       => 'The CAFI matching grant is a non-repayable grant from the CAFI project. It is worked out from what your investor puts in — 50% of the first US$ 300,000 plus 33% of any amount above that, up to US$ 350,000 — so you do not type it. It is paid in tranches once the conditions in the Grant Agreement are met, and may only be spent on the items in your grant utilisation budget.',
+        'project_cost'          => 'The total cost of the project the investment and grant will pay for, in US dollars (the Maloti equivalent is shown underneath), including your own contribution. It cannot be less than the indicative CAFI grant.',
         'investment_purpose'    => 'The main things the investor\'s money and the CAFI grant will pay for, with rough amounts (e.g. equipment M 300,000; working capital M 150,000).',
         'investment_history'    => 'All the money put into the company since it started, by source, with the date of the most recent amount from each source.',
         'grant_budget'          => 'How the investor\'s money and the CAFI grant will be spent, by category, in Maloti. The "Should add up to" row shows the targets: the private column must add up to what your investor(s) put in, and the CAFI grant column to your matching grant. This budget is carried into the Grant Agreement.',
@@ -213,6 +240,23 @@ class EnterpriseProfile extends Model
         'section.bank'          => 'The bank account the CAFI grant will be paid into. It must be in the company\'s registered name. The LEHSFF team checks these details against your bank confirmation letter before any payment.',
         'bank_account_name'     => 'Exactly as it appears on the bank account — it must be the company\'s registered name, not a personal account.',
         'grant_outside_justification' => 'Explain why this part of the grant has to be spent outside Lesotho, e.g. the equipment is not available locally. Needed when less than 70% of the grant is spent in Lesotho.',
+        // 8.2 · 8.3 · 8.4 (form v2)
+        'section.investor'      => 'The private investor who is leading this investment. The CAFI grant matches what this investor puts in.',
+        'lead_investor_name'    => 'The name of the person, company or fund leading the investment.',
+        'lead_investor_contact' => 'The person at the investor we can contact to confirm the investment.',
+        'lead_investor_country' => 'The country the investor is based in.',
+        'lead_investor_amount'  => 'How much the investor will put into the enterprise in this transaction, in US dollars (the Maloti equivalent is shown underneath). The indicative CAFI grant is calculated from this amount.',
+        'investor_commitment'   => 'Whether the investor has confirmed in writing (Yes), only indicated interest (Indicative only), or not yet (No).',
+        'section.transaction'   => 'The terms of the investment: the instrument, the agreed amount, the valuation and when the investment is expected to close.',
+        'tx_amount'             => 'The amount you will receive from the investor, as agreed. When given, the indicative CAFI grant is calculated from it.',
+        'valuation'             => 'The value of the enterprise used for this investment (for equity or convertible instruments). Leave empty if there is no valuation yet.',
+        'expected_close'        => 'A date or timeframe, e.g. "March 2027" or "within 3 months".',
+        'tx_description'        => 'In up to 100 words: what the investor is investing in, on what terms, and the business outcome you expect.',
+        'section.grant_use'     => 'An indicative budget for the CAFI grant only — not for the investor\'s money. Add the items or activities the grant will pay for under each approved category.',
+        'grant_plan'            => 'Add each item or activity the grant will pay for: what it is, why it is needed, quantity × unit cost (or a lump sum) in US$, and whether the money is spent in Lesotho or outside. The total cannot be more than your indicative CAFI grant.',
+        'grant_lesotho_70'      => 'At least 70% of the CAFI grant must be spent in Lesotho. The platform works out the share from your budget; answer what you expect.',
+        'double_financing'      => 'Whether any item in this budget is also paid for by another grant or public funding source. The same expenditure cannot be financed twice.',
+        'grant_growth_support'  => 'In up to 150 words: how the grant-funded items help the enterprise grow — more production, new markets, jobs.',
         'investments'           => 'Each separate investment the company has received from an investor, with the date and amount. List every one — reviewers look at how often and how much each investor has invested.',
 
         // 5 · Attachments & declaration
@@ -228,6 +272,9 @@ class EnterpriseProfile extends Model
         'pre_investment' => 'Pre-Investment / Catalytic Funding Grant', 'co_investment' => 'Co-Investment Grant', 'other' => 'Other',
         'none' => 'None',
     ];
+
+    /** Form v2 1.13 — the programmes offered on the form (the other keys above stay for older answers) */
+    public const PRIOR_SUPPORT_CHOICES = ['incubation_hub', 'leap', 'horticulture'];
 
     /** Yes / No / In progress (OBFC registration, RSL tax file) */
     public const YES_NO_PROGRESS = ['yes' => 'Yes', 'no' => 'No', 'in_progress' => 'In progress'];
@@ -311,12 +358,68 @@ class EnterpriseProfile extends Model
         'maturity'    => 'Maturity (sustainable profits)',
     ];
 
-    /** Investment round financing type */
-    public const PARTICIPATION = ['equity' => 'Equity', 'convertible_note' => 'Convertible Note', 'safe' => 'SAFE', 'revenue_share' => 'Revenue Share', 'other' => 'Other'];
+    /** Form v2 8.3.1 — proposed investment instrument */
+    public const INSTRUMENTS = ['equity' => 'Equity', 'quasi_equity' => 'Quasi-equity', 'convertible' => 'Convertible instrument', 'debt' => 'Debt'];
 
-    public const INVESTOR_TYPES = ['Private equity fund', 'Venture capital fund', 'Angel investor', 'Corporate investor', 'Development finance institution', 'Commercial bank', 'Other'];
+    /** Instrument labels, including answers given on the earlier form */
+    public const PARTICIPATION = self::INSTRUMENTS + ['convertible_note' => 'Convertible Note', 'safe' => 'SAFE', 'revenue_share' => 'Revenue Share', 'other' => 'Other'];
 
-    public const TRANSACTION_STATUSES = ['discussion' => 'In discussion', 'loi' => 'LOI received', 'term_sheet' => 'Term sheet signed', 'agreement' => 'Investment agreement signed'];
+    /** Form v2 8.2.5 — investor type */
+    public const LEAD_INVESTOR_TYPES = ['Angel investor', 'Venture capital fund', 'Family office', 'Institutional investor', 'Other'];
+
+    /** Investor types (form v2 first, then the earlier list — still used for investments received) */
+    public const INVESTOR_TYPES = ['Angel investor', 'Venture capital fund', 'Family office', 'Institutional investor', 'Private equity fund', 'Corporate investor', 'Development finance institution', 'Commercial bank', 'Other'];
+
+    /** Form v2 8.2.8 — current investor engagement status (stored in transaction_status) */
+    public const ENGAGEMENT_STATUSES = [
+        'initial'                => 'Initial discussions',
+        'interest'               => 'Investor interest expressed',
+        'indicative'             => 'Indicative commitment',
+        'loi'                    => 'Letter of Intent',
+        'term_sheet_negotiation' => 'Term Sheet under negotiation',
+        'term_sheet'             => 'Term Sheet signed / executed',
+        'agreement'              => 'Investment Agreement',
+        'financial_close'        => 'Financial close',
+    ];
+
+    /** Engagement labels, including answers given on the earlier form */
+    public const TRANSACTION_STATUSES = self::ENGAGEMENT_STATUSES + ['discussion' => 'In discussion'];
+
+    /** Form v2 8.2.9 */
+    public const COMMITMENT = ['yes' => 'Yes', 'no' => 'No', 'indicative' => 'Indicative only'];
+
+    /** Form v2 8.3.6 / 8.3.7 */
+    public const VALUATION_BY      = ['internal' => 'Internally developed', 'investor' => 'Investor developed', 'both' => 'Agreed upon by both'];
+    public const VALUATION_METHODS = ['income' => 'Income approach', 'market' => 'Market approach', 'asset' => 'Asset-based approach', 'not_sure' => 'Not sure'];
+
+    /** Currency of the investor / transaction amounts (8.2.7, 8.3.3, 8.3.5) => [label, symbol] */
+    public const CURRENCIES = ['LSL' => ['Maloti', 'M'], 'ZAR' => ['Rand', 'R'], 'USD' => ['US dollar', 'US$']];
+
+    /** Form v2 8.2.6 — investor country */
+    public const COUNTRIES = [
+        'Lesotho', 'South Africa', 'Botswana', 'Eswatini', 'Namibia', 'Zimbabwe', 'Mozambique', 'Zambia', 'Malawi', 'Angola', 'Tanzania',
+        'Madagascar', 'Mauritius', 'Democratic Republic of the Congo', 'Kenya', 'Uganda', 'Rwanda', 'Ethiopia', 'Ghana', 'Nigeria', 'Egypt', 'Morocco',
+        'United Kingdom', 'Ireland', 'Netherlands', 'Germany', 'France', 'Belgium', 'Switzerland', 'Luxembourg', 'Sweden', 'Norway', 'Denmark', 'Italy', 'Spain', 'Portugal',
+        'United States', 'Canada', 'United Arab Emirates', 'Saudi Arabia', 'Qatar', 'India', 'China', 'Hong Kong', 'Singapore', 'Japan', 'Australia', 'Brazil', 'Other',
+    ];
+
+    /** Form v2 8.4 B — approved expenditure categories: key => [label, example item, what to describe] */
+    public const GRANT_CATEGORIES = [
+        'productive_assets' => ['Productive assets and equipment', 'e.g. Processing equipment',                'Specify the equipment and explain how it supports the enterprise\'s growth plan.'],
+        'technology'        => ['Technology and digital systems',  'e.g. Inventory management system',         'Describe the system, its purpose and expected business benefit.'],
+        'working_capital'   => ['Working capital',                 'e.g. Raw materials or inventory',          'Identify the proposed expenditure and explain its link to increased production or sales.'],
+        'product_dev'       => ['Product or service development',  'e.g. Product testing or development',      'Describe the activity and the intended improvement to the product or service.'],
+        'market_expansion'  => ['Market expansion',                'e.g. Market entry and distribution costs', 'Identify the target market and the expenditure required to access it.'],
+        'other'             => ['Other eligible expenditure',      'Specify item / activity',                  'Explain the purpose and why the expenditure is necessary for the proposed growth activity.'],
+    ];
+
+    /** Expenditure location of a budget line */
+    public const LOCATIONS = ['lesotho' => 'Lesotho', 'outside' => 'Outside Lesotho'];
+
+    /** Form v2 8.4 C2 */
+    public const LESOTHO_70 = ['yes' => 'Yes', 'no' => 'No', 'unsure' => 'Unsure'];
+
+    public const BLANK_PLAN_ITEM = ['item' => '', 'description' => '', 'quantity' => '', 'unit_cost' => '', 'lump_sum' => false, 'amount' => '', 'location' => 'lesotho', 'country' => ''];
 
     /** Total amount of investment in the company to date — source => label */
     public const FUNDING_SOURCES = [
@@ -344,6 +447,14 @@ class EnterpriseProfile extends Model
         'obfc_registered'       => 'boolean',
         'foreign_registered'    => 'boolean',
         'has_investor'          => 'boolean',
+        'tx_amount_agreed'      => 'boolean',
+        'tx_terms_agreed'       => 'boolean',
+        'tx_conditions_outstanding' => 'boolean',
+        'double_financing'      => 'boolean',
+        'grant_plan'            => 'array',
+        'lead_investor_amount'  => 'decimal:2',
+        'tx_amount'             => 'decimal:2',
+        'valuation'             => 'decimal:2',
         'foreign_owned'         => 'boolean',
         'primary_ops_lesotho'   => 'boolean',
         'ownership_dispute'     => 'boolean',
@@ -371,6 +482,46 @@ class EnterpriseProfile extends Model
     {
         // Keep the single investor name / amount (used by the EOI, Gate 1 and Gate 2) in step with the investor list
         static::saving(function (EnterpriseProfile $p) {
+            // Form v2: one lead investor → the investor list / round amount the gates read
+            if ($p->isDirty(['has_investor', 'lead_investor_name', 'lead_investor_country', 'lead_investor_amount', 'tx_amount', 'tx_amount_agreed', 'investment_currency'])) {
+                if ($p->has_investor === false) {
+                    $p->round_investors = [];
+                    $p->round_amount    = null;
+                } elseif (filled($p->lead_investor_name)) {
+                    $amount = $p->leadInvestmentLsl();
+                    $p->round_investors = [['name' => trim($p->lead_investor_name), 'id_number' => '', 'country' => (string) $p->lead_investor_country, 'ticket' => $amount]];
+                    $p->round_amount    = $amount;
+                }
+            }
+
+            // 8.3.10 transaction description doubles as "what the money is for" on the gate screens
+            if ($p->isDirty('tx_description') && filled($p->tx_description)) {
+                $p->investment_purpose = $p->tx_description;
+            }
+
+            // 8.4 grant plan (US$ line items) → grant budget in Maloti (grant column only) + amount spent outside Lesotho
+            if ($p->isDirty('grant_plan')) {
+                $rate  = self::usdRate();
+                $plan  = (array) ($p->grant_plan ?? []);
+                $rows  = [];
+                $out   = 0.0;
+                foreach (self::GRANT_CATEGORIES as $key => [$label]) {
+                    $items = collect($plan[$key] ?? [])->map(fn ($it) => $it + ['total' => self::planItemTotal($it)])->filter(fn ($it) => filled($it['item'] ?? null) || $it['total'] > 0);
+                    if ($items->isEmpty()) {
+                        continue;
+                    }
+                    $out   += $items->where('location', 'outside')->sum('total') * $rate;
+                    $rows[] = [
+                        'category' => $label,
+                        'private'  => null,
+                        'grant'    => round($items->sum('total') * $rate, 2),
+                        'items'    => $items->map(fn ($it) => ['name' => (string) $it['item'], 'private' => null, 'grant' => round($it['total'] * $rate, 2)])->values()->all(),
+                    ];
+                }
+                $p->grant_budget          = $rows ?: null;
+                $p->grant_outside_lesotho = $rows ? round($out, 2) : null;
+            }
+
             if ($p->isDirty('round_investors')) {
                 $rows = $p->investorRows();
                 $p->investor_name         = $rows ? collect($rows)->pluck('name')->implode(', ') : null;
@@ -388,7 +539,7 @@ class EnterpriseProfile extends Model
                 $p->business_model = collect($p->business_models ?? [])->first();
             }
 
-            // The CAFI grant is not entered by the applicant — it is a fixed share of what the investor puts in
+            // The CAFI grant is not entered by the applicant — it follows the grant rule on what the investor puts in
             $p->grant_requested = self::matchingGrant($p->investorAmount());
         });
     }
@@ -460,18 +611,21 @@ class EnterpriseProfile extends Model
             $skip[] = 'sector_other';
         }
         if ($section === 'business' && $this->has_investor === false) {
-            array_push($skip, 'round_amount', 'round_investors', 'participation', 'grant_budget', 'grant_outside_lesotho', 'grant_outside_justification', ...self::BANK_FIELDS);
+            array_push($skip, 'grant_plan', 'grant_outside_justification', 'grant_lesotho_70', 'double_financing', 'double_financing_details', 'grant_growth_support', ...self::INVESTOR_FIELDS);
         }
-        if ($section === 'legal' && $this->obfc_registered !== true) {
-            $skip[] = 'registration_no';
+        if ($section === 'business' && $this->tx_amount_agreed !== true) {
+            $skip[] = 'tx_amount';
+        }
+        if ($section === 'business' && $this->double_financing !== true) {
+            $skip[] = 'double_financing_details';
         }
         if ($section === 'legal' && $this->foreign_registered !== true) {
             $skip[] = 'foreign_country';
         }
         if ($section === 'business' && $this->investorAmount() === null) {
-            array_push($skip, 'grant_budget', 'grant_outside_lesotho', 'grant_outside_justification');   // filled in after the investor amount is known
+            array_push($skip, 'grant_plan', 'grant_outside_justification', 'grant_lesotho_70');   // filled in after the investor amount is known
         }
-        if ($section === 'business' && ! $this->needsOutsideJustification()) {
+        if ($section === 'business' && ! $this->spendsOutsideLesotho()) {
             $skip[] = 'grant_outside_justification';
         }
 
@@ -496,6 +650,7 @@ class EnterpriseProfile extends Model
             'key_people'         => $this->keyPeopleRows() !== [],
             'employees'          => $v !== null && ($this->employeeBreakdownTotal() === null || (int) $v === $this->employeeBreakdownTotal()),
             'grant_budget'       => $this->budgetTotals()['private'] + $this->budgetTotals()['grant'] > 0,
+            'grant_plan'         => $this->planTotalUsd() > 0,
             default              => is_array($v) ? $v !== [] : ($v !== null && $v !== ''),
         };
     }
@@ -600,16 +755,107 @@ class EnterpriseProfile extends Model
 
     /* ---------------- Co-investment (config/cif.php → co_investment) ---------------- */
 
-    /** Share of the investor's money that CAFI matches (0.5 = 50%) */
-    public static function grantRatio(): float
+    /* ---------------- CAFI grant rule (investment model) ----------------
+     | Grant = 50% of the first US$ 300,000 of the investment + 33% of the investment above US$ 300,000,
+     | never more than US$ 350,000 for one transaction (config/cif.php co_investment.grant_tiers / max_grant_usd).
+     | The enterprise's lifetime total is limited separately (cumulative_cap_usd, checked at Gate 4).
+     */
+
+    /** [['up_to_usd' => ?float, 'rate' => float], ...] in order */
+    public static function grantTiers(): array
     {
-        return (float) config('cif.co_investment.grant_ratio', 0.5);
+        return (array) config('cif.co_investment.grant_tiers', [
+            ['up_to_usd' => 300000, 'rate' => 0.50],
+            ['up_to_usd' => null,   'rate' => 0.33],
+        ]);
     }
 
-    /** "50%" */
+    /** Most grant for one transaction, US$ */
+    public static function maxGrantUsd(): float
+    {
+        return (float) config('cif.co_investment.max_grant_usd', 350000);
+    }
+
+    public static function usdRateStatic(): float
+    {
+        return max((float) config('cif.usd_to_lsl', 18.00), 0.0001);
+    }
+
+    /** CAFI grant (US$) for an investor amount (US$): tiered, capped */
+    public static function matchingGrantUsd(?float $investorUsd): ?float
+    {
+        if ($investorUsd === null || $investorUsd <= 0) {
+            return null;
+        }
+
+        $grant = 0.0;
+        $floor = 0.0;
+        foreach (self::grantTiers() as $tier) {
+            $top    = $tier['up_to_usd'] ?? null;
+            $inTier = $top === null ? max(0, $investorUsd - $floor) : max(0, min($investorUsd, (float) $top) - $floor);
+            $grant += $inTier * (float) $tier['rate'];
+            if ($top === null || $investorUsd <= (float) $top) {
+                break;
+            }
+            $floor = (float) $top;
+        }
+
+        return round(min($grant, self::maxGrantUsd()), 2);
+    }
+
+    /** Investor amount (US$) needed for a given grant (US$) — the rule worked backwards (null if above the maximum) */
+    public static function investorNeededUsd(float $grantUsd): ?float
+    {
+        if ($grantUsd <= 0) {
+            return 0.0;
+        }
+        if ($grantUsd > self::maxGrantUsd() + 0.005) {
+            return null;
+        }
+
+        $floor = 0.0;
+        $base  = 0.0;   // grant earned below this tier
+        foreach (self::grantTiers() as $tier) {
+            $top  = $tier['up_to_usd'] ?? null;
+            $rate = max((float) $tier['rate'], 0.0001);
+            $tierGrant = $top === null ? INF : ((float) $top - $floor) * $rate;
+            if ($grantUsd <= $base + $tierGrant + 0.005) {
+                return round($floor + ($grantUsd - $base) / $rate, 2);
+            }
+            $base += $tierGrant;
+            $floor = (float) $top;
+        }
+
+        return null;
+    }
+
+    /** Effective grant as a share of the investment, e.g. 48 (%) */
+    public static function effectiveGrantPct(?float $investorLsl): ?float
+    {
+        $grant = self::matchingGrant($investorLsl);
+
+        return $grant !== null && $investorLsl > 0 ? round($grant / $investorLsl * 100, 1) : null;
+    }
+
+    /** First-tier rate (0.5). Kept for older code — the grant itself always comes from matchingGrant(). */
+    public static function grantRatio(): float
+    {
+        return (float) (self::grantTiers()[0]['rate'] ?? 0.5);
+    }
+
+    /** "50% of the first US$ 300,000 + 33% above, up to US$ 350,000" */
     public static function grantRatioLabel(): string
     {
-        return rtrim(rtrim(number_format(self::grantRatio() * 100, 1), '0'), '.').'%';
+        $pct   = fn ($r) => rtrim(rtrim(number_format($r * 100, 1), '0'), '.').'%';
+        $tiers = self::grantTiers();
+        $parts = [];
+        foreach ($tiers as $i => $t) {
+            $parts[] = $i === 0
+                ? $pct($t['rate']).($t['up_to_usd'] ? ' of the first US$ '.number_format($t['up_to_usd']) : '')
+                : $pct($t['rate']).' above'.($t['up_to_usd'] ? ' (to US$ '.number_format($t['up_to_usd']).')' : '');
+        }
+
+        return implode(' + ', $parts).', up to US$ '.number_format(self::maxGrantUsd());
     }
 
     /** Minimum the investor must be investing, in US$ */
@@ -624,10 +870,24 @@ class EnterpriseProfile extends Model
         return self::minInvestorUsd() * max((float) config('cif.usd_to_lsl', 18.00), 0.0001);
     }
 
-    /** CAFI grant (Maloti) for a given investor amount (Maloti) */
+    /** CAFI grant (Maloti) for a given investor amount (Maloti) — the tiered rule, worked out in US$ */
     public static function matchingGrant(?float $investorLsl): ?float
     {
-        return $investorLsl !== null && $investorLsl > 0 ? round($investorLsl * self::grantRatio(), 2) : null;
+        if ($investorLsl === null || $investorLsl <= 0) {
+            return null;
+        }
+        $rate = self::usdRateStatic();
+
+        return round(self::matchingGrantUsd($investorLsl / $rate) * $rate, 2);
+    }
+
+    /** Investor amount (Maloti) needed to support a grant (Maloti) */
+    public static function investorNeededFor(float $grantLsl): ?float
+    {
+        $rate = self::usdRateStatic();
+        $usd  = self::investorNeededUsd($grantLsl / $rate);
+
+        return $usd === null ? null : round($usd * $rate, 2);
     }
 
     /** Whether an investor amount (Maloti) reaches the minimum */
@@ -636,22 +896,116 @@ class EnterpriseProfile extends Model
         return $investorLsl !== null && $investorLsl + 0.005 >= self::minInvestorLsl();
     }
 
-    /** What the investor(s) are putting in (Maloti): the investor tickets, otherwise the current round */
+    /** What the investor is putting in (Maloti): the lead investor (form v2), otherwise the earlier investor list / round */
     public function investorAmount(): ?float
     {
         if ($this->has_investor === false) {
             return null;
         }
 
-        $amount = (float) $this->investor_contribution ?: (float) $this->round_amount;
+        $amount = $this->leadInvestmentLsl() ?? ((float) $this->investor_contribution ?: (float) $this->round_amount);
 
         return $amount > 0 ? $amount : null;
     }
 
+    /* ---------------- Form v2 8.2 / 8.3 — lead investor and transaction ---------------- */
+
+    /** Investor fields, skipped when there is no investor */
+    public const INVESTOR_FIELDS = [
+        'lead_investor_name', 'lead_investor_contact_name', 'lead_investor_email', 'lead_investor_phone', 'lead_investor_website',
+        'investor_type', 'lead_investor_country', 'investment_currency', 'lead_investor_amount', 'transaction_status', 'investor_commitment',
+        'participation', 'tx_amount_agreed', 'tx_amount', 'tx_terms_agreed', 'valuation', 'valuation_by', 'valuation_method',
+        'expected_close', 'tx_conditions_outstanding', 'tx_description',
+    ];
+
+    public static function usdRate(): float
+    {
+        return max((float) config('cif.usd_to_lsl', 18.00), 0.0001);
+    }
+
+    /** An amount in the given currency → Maloti (Rand is at par with the Maloti) */
+    public static function toLsl(?float $amount, ?string $currency): ?float
+    {
+        if ($amount === null) {
+            return null;
+        }
+
+        return round(strtoupper((string) $currency) === 'USD' ? $amount * self::usdRate() : $amount, 2);
+    }
+
+    /** "M 1,000" / "US$ 1,000" */
+    public static function money(?float $amount, ?string $currency = 'LSL'): string
+    {
+        return $amount === null ? '—' : (self::CURRENCIES[strtoupper((string) $currency)][1] ?? 'M').' '.number_format($amount);
+    }
+
+    /** The eligible private investment (8.3.3 once agreed, otherwise 8.2.7), in Maloti */
+    public function leadInvestmentLsl(): ?float
+    {
+        $amount = $this->tx_amount_agreed === true && $this->tx_amount !== null ? (float) $this->tx_amount
+            : ($this->lead_investor_amount !== null ? (float) $this->lead_investor_amount : null);
+
+        return $amount !== null && $amount > 0 ? self::toLsl($amount, $this->investment_currency ?: 'LSL') : null;
+    }
+
+    /* ---------------- Form v2 8.4 — grant plan (US$) ---------------- */
+
+    /** Total of one budget line in US$: quantity × unit cost, or the lump sum */
+    public static function planItemTotal(array $it): float
+    {
+        if (! empty($it['lump_sum'])) {
+            return is_numeric($it['amount'] ?? null) ? max(0, (float) $it['amount']) : 0.0;
+        }
+
+        return is_numeric($it['quantity'] ?? null) && is_numeric($it['unit_cost'] ?? null) ? max(0, (float) $it['quantity'] * (float) $it['unit_cost']) : 0.0;
+    }
+
+    /** ['total' => US$, 'outside' => US$, 'categories' => key => US$] for a plan array */
+    public static function planTotals(?array $plan): array
+    {
+        $cats = [];
+        $out  = 0.0;
+        foreach (self::GRANT_CATEGORIES as $key => $c) {
+            $items = collect($plan[$key] ?? []);
+            $cats[$key] = (float) $items->sum(fn ($it) => self::planItemTotal((array) $it));
+            $out += (float) $items->filter(fn ($it) => ($it['location'] ?? 'lesotho') === 'outside')->sum(fn ($it) => self::planItemTotal((array) $it));
+        }
+
+        return ['total' => array_sum($cats), 'outside' => $out, 'categories' => $cats];
+    }
+
+    public function planTotalUsd(): float
+    {
+        return self::planTotals((array) ($this->grant_plan ?? []))['total'];
+    }
+
+    /** Any grant budget line spent outside Lesotho */
+    public function spendsOutsideLesotho(): bool
+    {
+        return self::planTotals((array) ($this->grant_plan ?? []))['outside'] > 0 || (float) $this->grant_outside_lesotho > 0;
+    }
+
+    /** CAFI grants already approved for this enterprise (all its applications), in Maloti */
+    public function previousGrantsLsl(): float
+    {
+        if (! $this->user_id) {
+            return 0.0;
+        }
+        $eoiIds = ExpressionOfInterest::where('user_id', $this->user_id)->pluck('id');
+
+        return (float) Authorisation::whereIn('expression_of_interest_id', $eoiIds)->where('outcome', Authorisation::OUTCOME_AUTHORISED)->sum('grant_amount');
+    }
+
+    /** Lifetime cap (US$ 350,000) less grants already approved, in Maloti */
+    public function availableCumulativeLsl(): float
+    {
+        return max(0, GrantReadiness::cumulativeCapLsl() - $this->previousGrantsLsl());
+    }
+
     /* ---------------- Grant utilisation budget ---------------- */
 
-    /** Same categories as Gate 6 (§3.6.4) */
-    public const BUDGET_CATEGORIES = ConditionReview::BUDGET_CATEGORIES;
+    /** Approved expenditure categories (form v2 8.4 B) */
+    public const BUDGET_CATEGORIES = ['Productive assets and equipment', 'Technology and digital systems', 'Working capital', 'Product or service development', 'Market expansion', 'Other eligible expenditure'];
 
     /** Saved budget rows, or the empty categories */
     public function budgetRows(): array
@@ -679,7 +1033,7 @@ class EnterpriseProfile extends Model
         return self::sumBudget($this->grant_budget);
     }
 
-    /* ---------------- Bank account for the grant (checked at Gate 4) ---------------- */
+    /* ---------------- Bank account for the grant — entered by the applicant at Gate 4 (Grant readiness) ---------------- */
 
     public const BANK_FIELDS = ['bank_name', 'bank_branch', 'bank_account_name', 'bank_account_number', 'bank_account_type'];
 
@@ -741,10 +1095,10 @@ class EnterpriseProfile extends Model
         return $pct !== null && $pct < self::minLesothoPct();
     }
 
-    /** Whether the grant column matches the calculated matching grant (to the nearest Maloti) */
+    /** Whether the proposed grant utilisation is within the indicative grant (to the nearest Maloti) */
     public function budgetMatchesGrant(): bool
     {
-        return $this->grant_requested !== null && abs($this->budgetTotals()['grant'] - (float) $this->grant_requested) < 1;
+        return $this->grant_requested !== null && $this->budgetTotals()['grant'] <= (float) $this->grant_requested + 1;
     }
 
     /** "0-10" or "Over 10" — the applicant's answer */

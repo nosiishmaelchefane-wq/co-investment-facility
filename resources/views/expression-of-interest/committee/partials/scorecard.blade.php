@@ -3,6 +3,8 @@
     $recused   = $card['coi'] === 'recused';
     $submitted = (bool) $myCard?->isSubmitted();
     $lock      = ! $canScore;
+    $editingOther = $editingOther ?? false;
+    $ownerName = $cardOwner?->name ?? auth()->user()->name;
     $myScores  = collect($card['scores'] ?? [])->filter(fn ($v) => is_numeric($v))->map(fn ($v) => (int) $v);
     $myTotal   = $myScores->sum();
     $maxTotal  = $SC::maxScore();
@@ -13,6 +15,7 @@
 @endphp
 <section class="section-card" id="g3-scorecard"
          x-data
+         x-on:scroll-to.window="if ($event.detail.target === '#g3-scorecard') setTimeout(() => $el.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100)"
          x-on:scorecard-invalid.window="setTimeout(() => {
              const el = document.querySelector('#g3-pack .is-invalid, #g3-scorecard .is-invalid, #g3-scorecard .text-danger');
              if (el) { el.closest('details')?.setAttribute('open', ''); el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.focus?.(); }
@@ -20,11 +23,17 @@
     <div class="section-card-head">
         <span class="section-no"><i class="bi bi-clipboard-check"></i></span>
         <div class="me-auto">
-            <h5>My evaluation scorecard</h5>
-            <div class="small text-muted">Appendix F — Co-Investment Evaluation Scorecard · {{ auth()->user()->name }}</div>
+            <h5>{{ $editingOther ? $ownerName.'’s evaluation scorecard' : 'My evaluation scorecard' }}</h5>
+            <div class="small text-muted">Appendix F — Co-Investment Evaluation Scorecard · {{ $ownerName }}</div>
         </div>
         @if (! $recused && $scored)
             <span class="pill {{ $myPct >= $SC::passPct() ? 'pill-ok' : 'pill-warn' }}" title="Your total score">{{ $myTotal }} / {{ $maxTotal }} · {{ $myPct }}%</span>
+        @endif
+        @if ($myCard?->edited_at)
+            <span class="pill pill-muted" title="Changed by the Committee secretary on the member’s behalf"><i class="bi bi-pencil-square"></i> Edited by {{ $myCard->editor?->name ?? 'the secretary' }} · {{ $myCard->edited_at->format('d M H:i') }}</span>
+        @endif
+        @if ($myCard?->reopened_at && ! $submitted)
+            <span class="pill pill-warn" title="Sent back by the Committee secretary to be changed and submitted again"><i class="bi bi-arrow-counterclockwise"></i> Reopened {{ $myCard->reopened_at->format('d M H:i') }}</span>
         @endif
         @if ($submitted)
             <span class="pill pill-ok"><i class="bi bi-check-lg"></i> Submitted {{ $myCard->submitted_at->format('d M Y H:i') }}</span>
@@ -171,7 +180,14 @@
         </div>
     @endif
 
-    @if ($canScore && $errors->has('card.*'))
+    @if ($editingOther)
+        <div class="callout callout-warning small mb-3">
+            <i class="bi bi-person-gear me-1"></i> You are editing <strong>{{ $ownerName }}</strong>’s scorecard as the Committee secretary.
+            Changes save as you go and are marked “Edited by {{ auth()->user()->name }}” on the scorecard. {{ $submitted ? 'It stays submitted.' : 'It stays a draft until the member submits it.' }}
+        </div>
+    @endif
+
+    @if ($canScore && ! $editingOther && $errors->has('card.*'))
         @php
             $packMissing  = collect($CR::PACK)->filter(fn ($p, $k) => $errors->has("card.pack_comments.$k"));
             $scoreMissing = collect($SC::SHORT)->filter(fn ($l, $k) => $errors->has("card.scores.$k"));
@@ -197,7 +213,14 @@
         </div>
     @endif
 
-    @if ($canScore)
+    @if ($editingOther)
+        <div class="d-flex flex-wrap align-items-center gap-2 mt-3 pt-3 border-top">
+            <span class="small text-muted"><i class="bi bi-check2-circle me-1"></i> All changes are saved.</span>
+            <button type="button" class="btn btn-brand ms-auto" wire:click="finishMemberEdit" wire:loading.attr="disabled" wire:target="finishMemberEdit">
+                <i class="bi bi-check-lg me-1"></i> Done editing
+            </button>
+        </div>
+    @elseif ($canScore)
         <div class="d-flex flex-wrap align-items-center gap-2 mt-3 pt-3 border-top">
             <span class="small text-muted"><i class="bi bi-pen me-1"></i> Submitting signs the scorecard — your scores and your comments on the information pack — as {{ auth()->user()->name }}. It can't be changed afterwards.</span>
             <button type="button" class="btn btn-brand ms-auto" wire:click="submitScorecard" wire:loading.attr="disabled" wire:target="submitScorecard"
