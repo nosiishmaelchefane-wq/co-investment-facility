@@ -445,7 +445,7 @@ new class extends Component
             'form.investor_country'         => ['nullable', 'string', 'max:80'],
             'form.investor_contact_name'    => ['nullable', 'string', 'max:255'],
             'form.investor_contact_email'   => ['nullable', 'email', 'max:255'],
-            'form.expected_close'           => ['nullable', 'string', 'max:120'],
+            'form.expected_close'           => ['nullable', 'date', 'after_or_equal:today'],
             'form.investor_evidence'        => ['nullable', 'array'],
             'form.support_need'             => ['required', 'in:ci_facility,progress_deal,find_investor,readiness,assess_me'],
             'form.declaration_agree'        => ['accepted'],
@@ -1114,7 +1114,8 @@ new class extends Component
                             </div>
                             <div class="col-md-6">
                                 <label class="form-label" for="expected_close">Expected close / deployment {!! $fp('expected_close') !!}</label>
-                                <input type="text" id="expected_close" wire:model="form.expected_close" placeholder='e.g. "March 2027" or "within 3 months"' class="form-control">
+                                <input type="date" id="expected_close" wire:model="form.expected_close" min="{{ now()->toDateString() }}" class="form-control @error('form.expected_close') is-invalid @enderror">
+                                @error('form.expected_close') <div class="invalid-feedback">{{ $message }}</div> @enderror
                             </div>
                         </div>
                         @php
@@ -1230,7 +1231,7 @@ new class extends Component
                             'Investor type' => $showInvestorBlock ? ($form['investor_type'] ?: null) : false,
                             'Investor country' => $showInvestorBlock ? ($form['investor_country'] ?: null) : false,
                             'Investor contact' => $showInvestorBlock ? (trim(($form['investor_contact_name'] ?? '').' '.(filled($form['investor_contact_email'] ?? '') ? '· '.$form['investor_contact_email'] : '')) ?: null) : false,
-                            'Expected close' => $showInvestorBlock ? ($form['expected_close'] ?: null) : false,
+                            'Expected close' => $showInvestorBlock ? ($form['expected_close'] ? \Illuminate\Support\Carbon::parse($form['expected_close'])->format('d M Y') : null) : false,
                             'Evidence' => $showInvestorBlock ? $many($investorEvidence, $form['investor_evidence']) : false,
                         ], fn ($v) => $v !== false)],
                         5 => ['Support & declaration', [

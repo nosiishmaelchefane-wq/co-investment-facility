@@ -385,7 +385,7 @@ class DueDiligence extends Model
             $p?->tx_amount_agreed !== null ? 'Investment amount agreed with the investor: '.($p->tx_amount_agreed ? 'yes' : 'no').'.' : '',
             $p?->tx_terms_agreed !== null ? 'Terms agreed: '.($p->tx_terms_agreed ? 'yes' : 'no').'.' : '',
             $p?->tx_conditions_outstanding ? 'The applicant reports material conditions still outstanding before the investment is made.' : '',
-            $p?->expected_close ? 'Expected close / deployment: '.rtrim($p->expected_close, '.').'.' : '',
+            $p?->expected_close ? 'Expected close / deployment: '.$p->expectedCloseLabel().'.' : '',
             $area('transaction'),
             match (true) {
                 ! $stage     => 'Conclusion: the stage of the transaction must be confirmed.',

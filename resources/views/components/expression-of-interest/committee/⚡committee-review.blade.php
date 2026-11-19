@@ -170,15 +170,17 @@ new class extends Component
             ]),
             'Investment' => array_filter([
                 $p ? ['Lead investor', ($p->lead_investor_name ?: $p->investor_name ?: $eoi->investor_name)
-                        .(collect([$p->investor_type, $p->lead_investor_country])->filter()->isNotEmpty() ? ' ('.collect([$p->investor_type, $p->lead_investor_country])->filter()->implode(', ').')' : ''), 'Profile']
+                        .(collect([$p->investor_type, $p->lead_investor_country])->filter()->isNotEmpty() ? ' ('.collect([$p->investor_type, $p->lead_investor_country])->filter()->implode(', ').')' : ''),
+                        $p->fromMatchmaking('lead_investor_name') ? 'Matchmaking' : 'Profile']
                    : ['Investor', $eoi->investor_name, 'EOI'],
+                $p?->matchmakingResult() ? ['Found through matchmaking', $p->matchmakingLine().' — LEHSFF Collaboration Platform', 'Matchmaking'] : null,
                 $p ? ['Investment instrument', $P::PARTICIPATION[$p->participation ?? ''] ?? null, 'Profile'] : null,
-                $p ? ['Investor engagement · commitment', collect([$P::TRANSACTION_STATUSES[$p->transaction_status ?? ''] ?? null, isset($P::COMMITMENT[$p->investor_commitment ?? '']) ? 'committed: '.strtolower($P::COMMITMENT[$p->investor_commitment]) : null])->filter()->implode(' · ') ?: null, 'Profile'] : null,
+                $p ? ['Investor engagement · commitment', collect([$P::TRANSACTION_STATUSES[$p->transaction_status ?? ''] ?? null, isset($P::COMMITMENT[$p->investor_commitment ?? '']) ? 'committed: '.strtolower($P::COMMITMENT[$p->investor_commitment]) : null])->filter()->implode(' · ') ?: null, $p->fromMatchmaking('transaction_status') ? 'Matchmaking' : 'Profile'] : null,
                 $p ? ['Investment amount from the investor', $lsl($p->investorAmount()), 'Profile'] : ['Investor amount', $usd($eoi->investor_amount_usd), 'EOI'],
                 $p ? ['CAFI matching grant ('.$P::grantRatioLabel().')', $lsl($p->grant_requested), 'Profile'] : null,
                 $eoi->grant_requested_usd !== null ? ['CAFI grant requested', $usd($eoi->grant_requested_usd), 'EOI'] : null,
                 $p && $plan['total'] > 0 ? ['Grant budget (8.4)', collect($plan['categories'])->filter(fn ($x) => $x > 0)->map(fn ($x, $k) => ($P::GRANT_CATEGORIES[$k][0] ?? $k).' '.$usd($x))->implode('; ').' — total '.$usd($plan['total']), 'Profile'] : null,
-                $p?->expected_close ? ['Expected close', $p->expected_close, 'Profile'] : null,
+                $p?->expected_close ? ['Expected close', $p->expectedCloseLabel(), 'Profile'] : null,
                 $p ? ['Investment history', \App\Models\EnterpriseInvestment::summaryLine($p->investments), 'Profile'] : null,
                 $p ? ['Investor track record (whole facility)', implode('; ', \App\Models\EnterpriseInvestment::trackRecordLines($p)) ?: null, 'Facility'] : null,
                 ['Total investment required', $usd($eoi->investment_required_usd), 'EOI'],

@@ -250,7 +250,7 @@ class EnterpriseProfile extends Model
         'section.transaction'   => 'The terms of the investment: the instrument, the agreed amount, the valuation and when the investment is expected to close.',
         'tx_amount'             => 'The amount you will receive from the investor, as agreed. When given, the indicative CAFI grant is calculated from it.',
         'valuation'             => 'The value of the enterprise used for this investment (for equity or convertible instruments). Leave empty if there is no valuation yet.',
-        'expected_close'        => 'A date or timeframe, e.g. "March 2027" or "within 3 months".',
+        'expected_close'        => 'The date the investment is expected to close or the money to be deployed. It cannot be in the past.',
         'tx_description'        => 'In up to 100 words: what the investor is investing in, on what terms, and the business outcome you expect.',
         'section.grant_use'     => 'An indicative budget for the CAFI grant only — not for the investor\'s money. Add the items or activities the grant will pay for under each approved category.',
         'grant_plan'            => 'Add each item or activity the grant will pay for: what it is, why it is needed, quantity × unit cost (or a lump sum) in US$, and whether the money is spent in Lesotho or outside. The total cannot be more than your indicative CAFI grant.',
@@ -452,6 +452,8 @@ class EnterpriseProfile extends Model
         'tx_conditions_outstanding' => 'boolean',
         'double_financing'      => 'boolean',
         'grant_plan'            => 'array',
+        'matchmaking'           => 'array',
+        'matchmaking_synced_at' => 'datetime',
         'lead_investor_amount'  => 'decimal:2',
         'tx_amount'             => 'decimal:2',
         'valuation'             => 'decimal:2',
@@ -545,6 +547,54 @@ class EnterpriseProfile extends Model
     }
 
     /* ---------------- Relations ---------------- */
+
+    /** 8.3.8 Expected close / deployment as "15 Mar 2027" (older free-text answers are shown as they were typed) */
+    public function expectedCloseLabel(): ?string
+    {
+        if (blank($this->expected_close)) {
+            return null;
+        }
+        try {
+            return \Illuminate\Support\Carbon::parse($this->expected_close)->format('d M Y');
+        } catch (\Throwable) {
+            return (string) $this->expected_close;
+        }
+    }
+
+    /* ---------------- LEHSFF Collaboration Platform matchmaking (App\Support\CollaborationPlatform) ---------------- */
+
+    /** The matchmaking result behind 8.2, or null if the investor was not found through matchmaking */
+    public function matchmakingResult(): ?array
+    {
+        $mm = (array) ($this->matchmaking ?? []);
+
+        return ($mm['last_result'] ?? null) === 'found' && ! empty($mm['match']) ? $mm : null;
+    }
+
+    /** This answer was filled in from matchmaking and the applicant has not changed it */
+    public function fromMatchmaking(string $field): bool
+    {
+        $filled = (array) (($this->matchmaking ?? [])['filled'] ?? []);
+
+        return array_key_exists($field, $filled) && $this->{$field} == $filled[$field];
+    }
+
+    /** "Matched on the Collaboration Platform: Basotho Capital · In discussion · score 82% · introduced 12 Nov 2026" */
+    public function matchmakingLine(): ?string
+    {
+        $mm = $this->matchmakingResult();
+        if (! $mm) {
+            return null;
+        }
+        $m = (array) $mm['match'];
+
+        return collect([
+            ($mm['investor']['name'] ?? 'Investor'),
+            $m['status_label'] ?? null,
+            isset($m['score']) ? 'match score '.$m['score'].'%' : null,
+            ! empty($m['introduced_at']) ? 'introduced '.\Illuminate\Support\Carbon::parse($m['introduced_at'])->format('d M Y') : null,
+        ])->filter()->implode(' · ');
+    }
 
     public function user(): BelongsTo
     {

@@ -24,7 +24,7 @@
                     <div class="small fw-semibold text-navy px-3 pt-3">{{ $group }}</div>
                     <dl class="evidence-grid">
                         @foreach ($rows as [$fLabel, $fValue, $fSource])
-                            <dt><span class="src-tag {{ $fSource === 'EOI' ? 'src-eoi' : 'src-profile' }}">{{ $fSource }}</span> {{ $fLabel }}</dt>
+                            <dt><span class="src-tag {{ match ($fSource) { 'EOI' => 'src-eoi', 'Matchmaking' => 'src-match', default => 'src-profile' } }}">{{ $fSource }}</span> {{ $fLabel }}</dt>
                             <dd>@if (blank($fValue)) <span class="text-muted fst-italic">Not provided</span> @else <span class="evidence-value">{{ $fValue }}</span> @endif</dd>
                         @endforeach
                     </dl>
