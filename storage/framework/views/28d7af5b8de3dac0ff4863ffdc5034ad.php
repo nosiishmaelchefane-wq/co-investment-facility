@@ -1489,6 +1489,7 @@ unset($__errorArgs, $__bag); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendB
                                     $wc = fn ($f) => str_word_count(strip_tags((string) ($form[$f] ?? '')));
                                 ?>
                                 <div class="col-12 border-top pt-3"><div class="fw-semibold text-navy">8.2 Investor information <?php echo $tip('section.investor'); ?></div></div>
+                                <div class="col-12"><?php echo $__env->make('profile.partials.matchmaking-source', ['p' => $p, 'editing' => true], array_diff_key(get_defined_vars(), ['__data' => 1, '__path' => 1]))->render(); ?></div>
                                 <div class="col-md-6"><label class="form-label small fw-semibold">8.2.1 Has a private investor been identified? <?php echo $tip('has_investor'); ?> <span class="req">*</span></label>
                                     <div><?php echo $radios('has_investor', ['yes' => 'Yes', 'no' => 'No'], true); ?></div>
                                     <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php $__errorArgs = ['form.has_investor'];
@@ -1794,14 +1795,14 @@ if (isset($__messageOriginal)) { $message = $__messageOriginal; }
 endif;
 unset($__errorArgs, $__bag); ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?></div>
                                     <div class="col-md-6"><label class="form-label small fw-semibold">8.3.8 When is the investment expected to close or be deployed? <?php echo $tip('expected_close'); ?> <span class="req">*</span></label>
-                                        <input type="text" maxlength="120" class="form-control <?php $__errorArgs = ['form.expected_close'];
+                                        <input type="date" min="<?php echo e(now()->toDateString()); ?>" class="form-control <?php $__errorArgs = ['form.expected_close'];
 $__bag = $errors->getBag($__errorArgs[1] ?? 'default');
 if ($__bag->has($__errorArgs[0])) :
 if (isset($message)) { $__messageOriginal = $message; }
 $message = $__bag->first($__errorArgs[0]); ?> is-invalid <?php unset($message);
 if (isset($__messageOriginal)) { $message = $__messageOriginal; }
 endif;
-unset($__errorArgs, $__bag); ?>" wire:model="form.expected_close" placeholder="e.g. March 2027, or within 3 months">
+unset($__errorArgs, $__bag); ?>" wire:model="form.expected_close">
                                         <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php $__errorArgs = ['form.expected_close'];
 $__bag = $errors->getBag($__errorArgs[1] ?? 'default');
 if ($__bag->has($__errorArgs[0])) :
@@ -2206,16 +2207,22 @@ unset($__errorArgs, $__bag); ?>" wire:model="form.investment_history.<?php echo 
                                 $vYn  = fn ($v) => $v === null ? '—' : ($v ? 'Yes' : 'No');
                             ?>
                             <dt class="detail-label mt-2 mb-2">8.2 Investor information <?php echo $tip('section.investor'); ?></dt>
+                            <?php echo $__env->make('profile.partials.matchmaking-source', ['p' => $p], array_diff_key(get_defined_vars(), ['__data' => 1, '__path' => 1]))->render(); ?>
+                            <?php
+                                $mmTag = fn (string ...$fields) => collect($fields)->contains(fn ($f) => $p->fromMatchmaking($f))
+                                    ? ' <span class="pill pill-ok ms-1" style="font-size:.66rem" title="Filled in from the LEHSFF Collaboration Platform matchmaking"><i class="bi bi-diagram-3"></i> Matchmaking</span>'
+                                    : '';
+                            ?>
                             <div class="detail-grid mb-3">
-                                <div><dt>Private investor identified</dt><dd><?php echo e($yn($p->has_investor ?? ($p->investorRows() ? true : null))); ?></dd></div>
+                                <div><dt>Private investor identified<?php echo $mmTag('has_investor'); ?></dt><dd><?php echo e($yn($p->has_investor ?? ($p->investorRows() ? true : null))); ?></dd></div>
                                 <?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if BLOCK]><![endif]--><?php endif; ?><?php if($p->has_investor !== false): ?>
-                                    <div><dt>Lead investor</dt><dd><?php echo e($dash($p->lead_investor_name ?: collect($p->investorRows())->pluck('name')->implode(', '))); ?></dd></div>
-                                    <div><dt>Contact</dt><dd><?php echo e(collect([$p->lead_investor_contact_name, $p->lead_investor_email, $p->lead_investor_phone])->filter()->implode(' · ') ?: '—'); ?></dd></div>
-                                    <div><dt>Website</dt><dd><?php echo e($dash($p->lead_investor_website)); ?></dd></div>
-                                    <div><dt>Investor type</dt><dd><?php echo e($dash($p->investor_type)); ?></dd></div>
-                                    <div><dt>Country</dt><dd><?php echo e($dash($p->lead_investor_country)); ?></dd></div>
+                                    <div><dt>Lead investor<?php echo $mmTag('lead_investor_name'); ?></dt><dd><?php echo e($dash($p->lead_investor_name ?: collect($p->investorRows())->pluck('name')->implode(', '))); ?></dd></div>
+                                    <div><dt>Contact<?php echo $mmTag('lead_investor_contact_name', 'lead_investor_email', 'lead_investor_phone'); ?></dt><dd><?php echo e(collect([$p->lead_investor_contact_name, $p->lead_investor_email, $p->lead_investor_phone])->filter()->implode(' · ') ?: '—'); ?></dd></div>
+                                    <div><dt>Website<?php echo $mmTag('lead_investor_website'); ?></dt><dd><?php echo e($dash($p->lead_investor_website)); ?></dd></div>
+                                    <div><dt>Investor type<?php echo $mmTag('investor_type'); ?></dt><dd><?php echo e($dash($p->investor_type)); ?></dd></div>
+                                    <div><dt>Country<?php echo $mmTag('lead_investor_country'); ?></dt><dd><?php echo e($dash($p->lead_investor_country)); ?></dd></div>
                                     <div><dt>Investment amount</dt><dd><?php echo e($vM($p->lead_investor_amount)); ?></dd></div>
-                                    <div><dt>Engagement status</dt><dd><?php echo e($P::TRANSACTION_STATUSES[$p->transaction_status ?? ''] ?? '—'); ?></dd></div>
+                                    <div><dt>Engagement status<?php echo $mmTag('transaction_status'); ?></dt><dd><?php echo e($P::TRANSACTION_STATUSES[$p->transaction_status ?? ''] ?? '—'); ?></dd></div>
                                     <div><dt>Commitment</dt><dd><?php echo e($P::COMMITMENT[$p->investor_commitment ?? ''] ?? '—'); ?></dd></div>
                                 <?php endif; ?><?php if(\Livewire\Mechanisms\ExtendBlade\ExtendBlade::isRenderingLivewireComponent()): ?><!--[if ENDBLOCK]><![endif]--><?php endif; ?>
                             </div>
@@ -2228,7 +2235,7 @@ unset($__errorArgs, $__bag); ?>" wire:model="form.investment_history.<?php echo 
                                     <div><dt>Amount agreed</dt><dd><?php echo e($vYn($p->tx_amount_agreed)); ?><?php echo e($p->tx_amount_agreed ? ' — '.$vM($p->tx_amount) : ''); ?></dd></div>
                                     <div><dt>Principal terms agreed</dt><dd><?php echo e($vYn($p->tx_terms_agreed)); ?></dd></div>
                                     <div><dt>Valuation</dt><dd><?php echo e($vM($p->valuation)); ?><?php echo e($p->valuation_by ? ' · '.($P::VALUATION_BY[$p->valuation_by] ?? '') : ''); ?><?php echo e($p->valuation_method ? ' · '.($P::VALUATION_METHODS[$p->valuation_method] ?? '') : ''); ?></dd></div>
-                                    <div><dt>Expected close / deployment</dt><dd><?php echo e($dash($p->expected_close)); ?></dd></div>
+                                    <div><dt>Expected close / deployment</dt><dd><?php echo e($dash($p->expectedCloseLabel())); ?></dd></div>
                                     <div><dt>Material conditions outstanding</dt><dd><?php echo e($vYn($p->tx_conditions_outstanding)); ?></dd></div>
                                     <div><dt>Total project cost</dt><dd><?php echo e($p->project_cost !== null ? 'US$ '.number_format((float) $p->project_cost / $P::usdRate()) : '—'); ?> <span class="small text-muted"><?php echo e($p->project_cost !== null ? $lsl($p->project_cost) : ''); ?></span></dd></div>
                                 </div>

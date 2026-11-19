@@ -602,6 +602,7 @@ button.stat-card.is-active { border-color: var(--brand-accent) !important; box-s
 .src-tag { flex-shrink: 0; font-size: .62rem; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; padding: .1rem .35rem; border-radius: .3rem; margin-top: .1rem; }
 .src-eoi { background: rgba(41, 49, 125, .1); color: #29317D; }
 .src-profile { background: rgba(8, 158, 73, .12); color: #067a39; }
+.src-match { background: rgba(217, 119, 6, .14); color: #92400e; }   /* from the Collaboration Platform matchmaking */
 @media (max-width: 575.98px) {
     .evidence-grid { grid-template-columns: 1fr; gap: .15rem; }
     .evidence-grid dd { margin-bottom: .45rem; }

@@ -18,6 +18,24 @@ return [
      */
     'usd_to_lsl' => (float) env('CIF_USD_TO_LSL', 18.00),
 
+    /*
+     | LEHSFF Collaboration Platform — investor matchmaking (App\Support\CollaborationPlatform)
+     | The enterprise profile's 8.2 Investor information is filled in from the matchmaking result, found by the
+     | e-mail the enterprise registered with on both platforms. Same token on both platforms (CIF_API_TOKEN there).
+     |   .env  COLLAB_API_URL=https://collaboration.example.org   COLLAB_API_TOKEN=...
+     */
+    'collaboration' => [
+        'base_url'     => rtrim((string) env('COLLAB_API_URL', ''), '/'),
+        'token'        => env('COLLAB_API_TOKEN'),
+        'timeout'      => (int) env('COLLAB_API_TIMEOUT', 8),
+        'sync_minutes' => (int) env('COLLAB_SYNC_MINUTES', 360),   // how often a profile is re-checked when opened
+
+        // Public website of the Collaboration Platform — the landing page's "Find an investor" link.
+        // Falls back to COLLAB_API_URL when the website and the API are on the same address.
+        'public_url'    => rtrim((string) env('COLLAB_PUBLIC_URL', env('COLLAB_API_URL', '')), '/'),
+        'register_path' => env('COLLAB_REGISTER_PATH', '/register'),
+    ],
+
     'fx' => [
         'cache_minutes' => (int) env('CIF_FX_CACHE_MINUTES', 60),
         'refresh_cron'  => env('CIF_FX_REFRESH_CRON', '15 6,14 * * *'),

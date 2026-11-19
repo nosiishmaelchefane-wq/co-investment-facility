@@ -64,6 +64,35 @@ new class extends Component
             $this->userId   = $userId;
             $this->readOnly = true;
         }
+
+        // 8.2 Investor information from the Collaboration Platform matchmaking (same e-mail on both platforms).
+        // Re-checked at most every few hours (config cif.collaboration.sync_minutes); never blocks the page.
+        try {
+            if (\App\Support\CollaborationPlatform::enabled() && $this->profile->exists) {
+                \App\Support\CollaborationPlatform::sync($this->profile);
+                unset($this->profile);
+            }
+        } catch (\Throwable $e) {
+            report($e);
+        }
+    }
+
+    /** "Refresh from matchmaking" — ask the Collaboration Platform now */
+    public function refreshMatchmaking(): void
+    {
+        abort_unless(\App\Support\CollaborationPlatform::enabled(), 404);
+
+        $result = \App\Support\CollaborationPlatform::sync($this->profile, force: true);
+        unset($this->profile);
+
+        [$type, $message] = match ($result) {
+            'filled'    => ['success', 'Investor information updated from the Collaboration Platform matchmaking.'],
+            'unchanged' => ['info', 'Matchmaking checked — nothing new to fill in. Answers you entered yourself are never overwritten.'],
+            'none'      => ['warning', 'No investor match was found on the Collaboration Platform for '.($this->owner->email).'.'],
+            'error'     => ['error', 'The Collaboration Platform could not be reached. Try again later.'],
+            default     => ['info', 'Matchmaking is not available for this profile.'],
+        };
+        $this->dispatch('notify', type: $type, message: $message);
     }
 
     #[Computed] public function owner(): User
@@ -250,6 +279,8 @@ new class extends Component
             'form.prior_cafi_support.required_if' => 'Choose the programme(s) that supported you.',
             'form.year_registered.required_if'  => 'Enter the year the company was registered with the OBFC.',
             'form.prior_support_details.required' => 'Please explain the support you received.',
+            'form.expected_close.after_or_equal'  => 'The expected close / deployment date cannot be in the past.',
+            'form.expected_close.date'            => 'Choose the date the investment is expected to close or be deployed.',
             'form.registration_no.required_if'  => 'Enter the registration number.',
             'form.foreign_country.required_if'  => 'Enter the country the firm is registered in.',
             'form.es_checklist.*.required'      => 'Please answer this question.',
@@ -645,7 +676,7 @@ new class extends Component
                 'form.valuation'                   => ['nullable', 'numeric', 'gt:0', 'max:9999999999999'],
                 'form.valuation_by'                => ['nullable', Rule::in(array_keys(EnterpriseProfile::VALUATION_BY))],
                 'form.valuation_method'            => ['nullable', Rule::in(array_keys(EnterpriseProfile::VALUATION_METHODS))],
-                'form.expected_close'              => [$hasInvestor ? 'required' : 'nullable', 'string', 'max:120'],
+                'form.expected_close'              => [$hasInvestor ? 'required' : 'nullable', 'date', 'after_or_equal:today'],
                 'form.tx_conditions_outstanding'   => [$hasInvestor ? 'required' : 'nullable', 'in:yes,no'],
                 'form.tx_description'              => [$hasInvestor ? 'required' : 'nullable', 'string', $words(100)],
                 'form.project_cost'                => ['required', 'numeric', 'gt:0', 'max:9999999999999', function ($attribute, $value, $fail) {
@@ -1654,6 +1685,7 @@ new class extends Component
                                     $wc = fn ($f) => str_word_count(strip_tags((string) ($form[$f] ?? '')));
                                 @endphp
                                 <div class="col-12 border-top pt-3"><div class="fw-semibold text-navy">8.2 Investor information {!! $tip('section.investor') !!}</div></div>
+                                <div class="col-12">@include('profile.partials.matchmaking-source', ['p' => $p, 'editing' => true])</div>
                                 <div class="col-md-6"><label class="form-label small fw-semibold">8.2.1 Has a private investor been identified? {!! $tip('has_investor') !!} <span class="req">*</span></label>
                                     <div>{!! $radios('has_investor', ['yes' => 'Yes', 'no' => 'No'], true) !!}</div>
                                     @error('form.has_investor') <div class="text-danger small">{{ $message }}</div> @enderror</div>
@@ -1749,7 +1781,7 @@ new class extends Component
                                             <option value="">Select…</option>@foreach ($P::VALUATION_METHODS as $k => $o)<option value="{{ $k }}">{{ $o }}</option>@endforeach</select>
                                         @error('form.valuation_method') <div class="invalid-feedback">{{ $message }}</div> @enderror</div>
                                     <div class="col-md-6"><label class="form-label small fw-semibold">8.3.8 When is the investment expected to close or be deployed? {!! $tip('expected_close') !!} <span class="req">*</span></label>
-                                        <input type="text" maxlength="120" class="form-control @error('form.expected_close') is-invalid @enderror" wire:model="form.expected_close" placeholder="e.g. March 2027, or within 3 months">
+                                        <input type="date" min="{{ now()->toDateString() }}" class="form-control @error('form.expected_close') is-invalid @enderror" wire:model="form.expected_close">
                                         @error('form.expected_close') <div class="invalid-feedback">{{ $message }}</div> @enderror</div>
                                     <div class="col-md-6"><label class="form-label small fw-semibold">8.3.9 Are there material conditions outstanding before the investment can proceed? <span class="req">*</span></label>
                                         <div>{!! $radios('tx_conditions_outstanding', ['yes' => 'Yes', 'no' => 'No']) !!}</div>
@@ -1979,16 +2011,22 @@ new class extends Component
                                 $vYn  = fn ($v) => $v === null ? '—' : ($v ? 'Yes' : 'No');
                             @endphp
                             <dt class="detail-label mt-2 mb-2">8.2 Investor information {!! $tip('section.investor') !!}</dt>
+                            @include('profile.partials.matchmaking-source', ['p' => $p])
+                            @php
+                                $mmTag = fn (string ...$fields) => collect($fields)->contains(fn ($f) => $p->fromMatchmaking($f))
+                                    ? ' <span class="pill pill-ok ms-1" style="font-size:.66rem" title="Filled in from the LEHSFF Collaboration Platform matchmaking"><i class="bi bi-diagram-3"></i> Matchmaking</span>'
+                                    : '';
+                            @endphp
                             <div class="detail-grid mb-3">
-                                <div><dt>Private investor identified</dt><dd>{{ $yn($p->has_investor ?? ($p->investorRows() ? true : null)) }}</dd></div>
+                                <div><dt>Private investor identified{!! $mmTag('has_investor') !!}</dt><dd>{{ $yn($p->has_investor ?? ($p->investorRows() ? true : null)) }}</dd></div>
                                 @if ($p->has_investor !== false)
-                                    <div><dt>Lead investor</dt><dd>{{ $dash($p->lead_investor_name ?: collect($p->investorRows())->pluck('name')->implode(', ')) }}</dd></div>
-                                    <div><dt>Contact</dt><dd>{{ collect([$p->lead_investor_contact_name, $p->lead_investor_email, $p->lead_investor_phone])->filter()->implode(' · ') ?: '—' }}</dd></div>
-                                    <div><dt>Website</dt><dd>{{ $dash($p->lead_investor_website) }}</dd></div>
-                                    <div><dt>Investor type</dt><dd>{{ $dash($p->investor_type) }}</dd></div>
-                                    <div><dt>Country</dt><dd>{{ $dash($p->lead_investor_country) }}</dd></div>
+                                    <div><dt>Lead investor{!! $mmTag('lead_investor_name') !!}</dt><dd>{{ $dash($p->lead_investor_name ?: collect($p->investorRows())->pluck('name')->implode(', ')) }}</dd></div>
+                                    <div><dt>Contact{!! $mmTag('lead_investor_contact_name', 'lead_investor_email', 'lead_investor_phone') !!}</dt><dd>{{ collect([$p->lead_investor_contact_name, $p->lead_investor_email, $p->lead_investor_phone])->filter()->implode(' · ') ?: '—' }}</dd></div>
+                                    <div><dt>Website{!! $mmTag('lead_investor_website') !!}</dt><dd>{{ $dash($p->lead_investor_website) }}</dd></div>
+                                    <div><dt>Investor type{!! $mmTag('investor_type') !!}</dt><dd>{{ $dash($p->investor_type) }}</dd></div>
+                                    <div><dt>Country{!! $mmTag('lead_investor_country') !!}</dt><dd>{{ $dash($p->lead_investor_country) }}</dd></div>
                                     <div><dt>Investment amount</dt><dd>{{ $vM($p->lead_investor_amount) }}</dd></div>
-                                    <div><dt>Engagement status</dt><dd>{{ $P::TRANSACTION_STATUSES[$p->transaction_status ?? ''] ?? '—' }}</dd></div>
+                                    <div><dt>Engagement status{!! $mmTag('transaction_status') !!}</dt><dd>{{ $P::TRANSACTION_STATUSES[$p->transaction_status ?? ''] ?? '—' }}</dd></div>
                                     <div><dt>Commitment</dt><dd>{{ $P::COMMITMENT[$p->investor_commitment ?? ''] ?? '—' }}</dd></div>
                                 @endif
                             </div>
@@ -2001,7 +2039,7 @@ new class extends Component
                                     <div><dt>Amount agreed</dt><dd>{{ $vYn($p->tx_amount_agreed) }}{{ $p->tx_amount_agreed ? ' — '.$vM($p->tx_amount) : '' }}</dd></div>
                                     <div><dt>Principal terms agreed</dt><dd>{{ $vYn($p->tx_terms_agreed) }}</dd></div>
                                     <div><dt>Valuation</dt><dd>{{ $vM($p->valuation) }}{{ $p->valuation_by ? ' · '.($P::VALUATION_BY[$p->valuation_by] ?? '') : '' }}{{ $p->valuation_method ? ' · '.($P::VALUATION_METHODS[$p->valuation_method] ?? '') : '' }}</dd></div>
-                                    <div><dt>Expected close / deployment</dt><dd>{{ $dash($p->expected_close) }}</dd></div>
+                                    <div><dt>Expected close / deployment</dt><dd>{{ $dash($p->expectedCloseLabel()) }}</dd></div>
                                     <div><dt>Material conditions outstanding</dt><dd>{{ $vYn($p->tx_conditions_outstanding) }}</dd></div>
                                     <div><dt>Total project cost</dt><dd>{{ $p->project_cost !== null ? 'US$ '.number_format((float) $p->project_cost / $P::usdRate()) : '—' }} <span class="small text-muted">{{ $p->project_cost !== null ? $lsl($p->project_cost) : '' }}</span></dd></div>
                                 </div>

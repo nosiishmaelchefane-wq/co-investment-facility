@@ -188,6 +188,13 @@ new class extends Component
 
         $eoiRow  = fn ($label, $value, $sub = null, $flag = null) => [$label, $value, 'EOI', $sub, $flag];
         $proRow  = fn ($label, $value, $sub = null, $flag = null) => [$label, $value, 'Profile', $sub, $flag];
+        // Investor answers filled from the Collaboration Platform matchmaking are tagged "Matchmaking"
+        $mmRow   = fn (array $fields, $label, $value, $sub = null, $flag = null) =>
+            [$label, $value, $p && collect($fields)->contains(fn ($f) => $p->fromMatchmaking($f)) ? 'Matchmaking' : 'Profile', $sub, $flag];
+        $mmSource = $p?->matchmakingResult()
+            ? [['Found through matchmaking', $p->matchmakingLine(), 'Matchmaking',
+                'LEHSFF Collaboration Platform · matched by the e-mail '.$p->user?->email.' · checked '.($p->matchmaking_synced_at?->format('d M Y H:i') ?? '—'), 'ok']]
+            : [];
         $money   = fn ($src, $label, array $m) => [$label, $m[0], $src, $m[1], null];
         $checks  = fn (array $defs, ?array $values) => collect($defs)->map(fn ($text, $k) => [$text, ! empty($values[$k])])->values()->all();
 
@@ -259,12 +266,13 @@ new class extends Component
                 $eoiRow('Investor', $eoi->investor_name),
                 $eoiRow('Investor status', $l('investor_status', $eoi->investor_status), $eoi->investor_status === 'other' ? $eoi->investor_status_other : null),
                 ...$profileOnly([
-                    $proRow('Has a participating investor', $yn($p?->has_investor),
+                    ...$mmSource,
+                    $mmRow(['has_investor'], 'Has a participating investor', $yn($p?->has_investor),
                         $p?->has_investor === false ? 'No investor — the matching grant cannot be calculated' : null,
                         $p?->has_investor === false ? 'bad' : ($p?->has_investor ? 'ok' : null)),
-                    $proRow('Lead investor (8.2.1)', $p?->lead_investor_name ?: $p?->investor_name,
+                    $mmRow(['lead_investor_name', 'investor_type', 'lead_investor_country'], 'Lead investor (8.2.1)', $p?->lead_investor_name ?: $p?->investor_name,
                         collect([$p?->investor_type, $p?->lead_investor_country])->filter()->implode(' · ') ?: null),
-                    $proRow('Investor contact (8.2.2 – 8.2.4)', collect([
+                    $mmRow(['lead_investor_contact_name', 'lead_investor_email', 'lead_investor_phone', 'lead_investor_website'], 'Investor contact (8.2.2 – 8.2.4)', collect([
                             $p?->lead_investor_contact_name, $p?->lead_investor_email, $p?->lead_investor_phone, $p?->lead_investor_website,
                         ])->filter()->values()->all() ?: null),
                     $proRow('Investment amount (8.2.7)', $inCur($p?->lead_investor_amount, $p?->investment_currency)),
@@ -278,7 +286,7 @@ new class extends Component
                 $eoiRow('Investor status', $l('investor_status', $eoi->investor_status)),
                 $eoiRow('Evidence available', $ls('investor_evidence', $eoi->investor_evidence)),
                 ...$profileOnly([
-                    $proRow('Engagement status (8.2.8)', $engagement),
+                    $mmRow(['transaction_status'], 'Engagement status (8.2.8)', $engagement),
                     $proRow('Investor has committed (8.2.9)', EnterpriseProfile::COMMITMENT[$p?->investor_commitment ?? ''] ?? null, null,
                         match ($p?->investor_commitment) { 'yes' => 'ok', 'no' => 'bad', default => null }),
                     $proRow('Amount agreed with the investor (8.3.2)', $yn($p?->tx_amount_agreed),
@@ -287,7 +295,7 @@ new class extends Component
                     $proRow('Terms agreed (8.3.4)', $yn($p?->tx_terms_agreed), null, $p?->tx_terms_agreed === false ? 'bad' : ($p?->tx_terms_agreed ? 'ok' : null)),
                     $proRow('Material conditions outstanding (8.3.9)', $yn($p?->tx_conditions_outstanding), null,
                         $p?->tx_conditions_outstanding ? 'bad' : ($p?->tx_conditions_outstanding === false ? 'ok' : null)),
-                    $proRow('Expected close / deployment (8.3.8)', $p?->expected_close),
+                    $proRow('Expected close / deployment (8.3.8)', $p?->expectedCloseLabel()),
                     $money('Profile', 'Committed by the investor', $fromLsl($investorLsl)),
                 ]),
             ],
@@ -1184,7 +1192,7 @@ new class extends Component
                                         </summary>
                                         <dl class="evidence-grid">
                                             @foreach ($ev['rows'] as [$rLabel, $rValue, $rSource, $rSub, $rFlag])
-                                                <dt><span class="src-tag {{ $rSource === 'EOI' ? 'src-eoi' : 'src-profile' }}">{{ $rSource }}</span> {{ $rLabel }}</dt>
+                                                <dt><span class="src-tag {{ match ($rSource) { 'EOI' => 'src-eoi', 'Matchmaking' => 'src-match', default => 'src-profile' } }}">{{ $rSource }}</span> {{ $rLabel }}</dt>
                                                 <dd>
                                                     @if (blank($rValue))
                                                         <span class="text-muted fst-italic">Not provided</span>

@@ -177,6 +177,10 @@
     $firstPct   = rtrim(rtrim(number_format($P::grantRatio() * 100, 1), '0'), '.').'%';   // "50%" 
     $minInvUsd  = $P::minInvestorUsd();
     $minLesotho = (int) config('cif.co_investment.min_lesotho_pct', 70);
+
+    // LEHSFF Collaboration Platform (investor matchmaking) — COLLAB_PUBLIC_URL / COLLAB_REGISTER_PATH in .env
+    $collabUrl      = config('cif.collaboration.public_url');
+    $collabRegister = $collabUrl ? $collabUrl.'/'.ltrim((string) config('cif.collaboration.register_path', '/register'), '/') : null;
     $exInvestUsd = 400000;                                                    // worked example, in US$
     $exGrantUsd  = $P::matchingGrantUsd($exInvestUsd);
 
@@ -376,12 +380,28 @@
                     <div class="icon-box accent mb-4"><i class="bi bi-arrow-left-right"></i></div>
                     <div class="small fw-semibold text-uppercase text-muted">Pathway 2</div>
                     <h3 class="h5 fw-bold text-cif-navy mt-1">LEHSFF Facilitated Matchmaking</h3>
-                    <p class="text-secondary small mt-3">
-                        No investor yet? Build your enterprise profile and we'll match you with investors by sector,
-                        ticket size and investment preferences, then facilitate the introduction. Once an investor commits,
-                        you continue with a Transaction EOI.
+                    <p class="text-secondary small mt-3 mb-2">
+                        No investor yet? Matchmaking runs on the <strong>LEHSFF Collaboration Platform</strong>:
                     </p>
-                    <a href="#auth" data-auth-show="register" class="arrow-link text-cif-accent">Find an investor →</a>
+                    <ol class="small text-secondary ps-3 mb-3">
+                        <li class="mb-1"><strong>Register and build your enterprise profile</strong> on the Collaboration Platform — your sector, stage, the funding you need and how you would like to raise it.</li>
+                        <li class="mb-1"><strong>We match you with investors</strong> whose preferences fit: sector, ticket size, investment instrument and stage. Each match gets a fit score.</li>
+                        <li class="mb-1"><strong>LEHSFF introduces you</strong> to the investor and follows the discussion until a deal is agreed.</li>
+                        <li><strong>Once the investor commits</strong>, register here and submit a Transaction EOI.</li>
+                    </ol>
+                    <p class="small mb-3" style="color: var(--cif-accent-dark);">
+                        <i class="bi bi-info-circle me-1"></i>
+                        Use the <strong>same e-mail address</strong> on both platforms — your matched investor's details are then
+                        filled into your Co-Investment profile automatically.
+                    </p>
+                    @if ($collabRegister)
+                        <a href="{{ $collabRegister }}" target="_blank" rel="noopener" class="arrow-link text-cif-accent">
+                            Find an investor on the Collaboration Platform <i class="bi bi-box-arrow-up-right ms-1"></i>
+                        </a>
+                        <div class="small text-muted mt-1">Already registered there? <a href="{{ $collabUrl }}/login" target="_blank" rel="noopener" class="text-cif-accent">Sign in</a></div>
+                    @else
+                        <a href="#auth" data-auth-show="register" class="arrow-link text-cif-accent">Find an investor →</a>
+                    @endif
                 </div>
             </div>
         </div>
@@ -580,7 +600,7 @@
             @foreach ([
                 ['Do we have to pay the grant back?', 'No. The CAFI matching grant is non-repayable and does not give CAFI shares in your company. It must, however, be used for the approved budget and reported on — misuse can lead to the grant being recovered.'],
                 ['How much grant can we get?', 'The grant is worked out on the money your private investor puts into the transaction: '.$ratioLabel.'. For example, US$ 400,000 from the investor gives a grant of US$ '.number_format($P::matchingGrantUsd(400000)).'. Your total CAFI grants over all transactions are also limited to US$ '.number_format((float) config('cif.co_investment.cumulative_cap_usd', 350000)).'. The final amount is confirmed by the Investment Committee and written into the Grant Agreement.'],
-                ['We do not have an investor yet. Can we still apply?', 'Yes. Register and complete your enterprise profile, and choose matchmaking. LEHSFF matches you with suitable investors and facilitates the introduction. Once an investor commits, you submit a Transaction EOI.'],
+                ['We do not have an investor yet. Can we still apply?', 'Yes. Register on the LEHSFF Collaboration Platform'.($collabRegister ? ' ('.$collabRegister.')' : '').' and build your enterprise profile there. LEHSFF matches you with investors whose sector, ticket size, instrument and stage preferences fit your business, introduces you, and follows the discussion. Once the investor commits, register here with the same e-mail address and submit a Transaction EOI — your matched investor\'s details are filled into your Co-Investment profile automatically.'],
                 ['What kind of investment counts?', 'Equity, convertible notes / SAFEs, loans or revenue-based financing from a private investor can all qualify. The investor must commit at least US$ '.number_format($minInvUsd).' and provide proof of the money when it is paid in.'],
                 ['How long does the process take?', 'It depends mainly on how complete your application is and how quickly requested documents come in. You can follow each gate online, and you are e-mailed whenever something is needed from you.'],
                 ['When is the grant paid?', 'After the Grant Agreement is signed and the conditions precedent are met. It is paid in tranches, each one released after your investor’s matching money for that tranche has been verified.'],
