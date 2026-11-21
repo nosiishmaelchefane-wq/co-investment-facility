@@ -305,8 +305,9 @@ class Dashboard
 
             if ($u->can('readiness.review')) {
                 $add('Grant readiness review', 'Review the budget, bank account and documents; prepare the Grant Readiness Memo and Draft Grant Agreement (Gate 4).', 'bi-clipboard-check', 'warning', 'Grants Management',
-                    $notStarted->map(fn ($e) => $this->row($e, 'readiness', 'Not started'))
-                        ->merge($ready->filter(fn ($g) => $g->stage() === 'grants')
+                    // toBase(): the rows are arrays, not models — an empty Eloquent collection would try to merge them by model key
+                    $notStarted->toBase()->map(fn ($e) => $this->row($e, 'readiness', 'Not started'))
+                        ->merge($ready->toBase()->filter(fn ($g) => $g->stage() === 'grants')
                             ->map(fn ($g) => $this->row($g->expressionOfInterest, 'readiness', $g->round > 1 ? 'Returned — round '.$g->round : 'In progress'))));
             }
             if ($u->can('readiness.hub')) {
